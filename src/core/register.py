@@ -166,14 +166,6 @@ class RegistrationEngine:
         """生成随机密码"""
         return ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
 
-    def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
-        """检查 IP 地理位置"""
-        try:
-            return self.http_client.check_ip_location()
-        except Exception as e:
-            self._log(f"检查 IP 地理位置失败: {e}", "error")
-            return False, None
-
     def _create_email(self) -> bool:
         """创建邮箱"""
         try:
@@ -670,17 +662,7 @@ class RegistrationEngine:
             self._log("开始注册流程")
             self._log("=" * 60)
 
-            # 1. 检查 IP 地理位置
-            self._log("1. 检查 IP 地理位置...")
-            ip_ok, location = self._check_ip_location()
-            if not ip_ok:
-                result.error_message = f"IP 地理位置不支持: {location}"
-                self._log(f"IP 检查失败: {location}", "error")
-                return result
-
-            self._log(f"IP 位置: {location}")
-
-            # 2. 创建邮箱
+            # 1. 创建邮箱
             self._log("2. 创建邮箱...")
             if not self._create_email():
                 result.error_message = "创建邮箱失败"
