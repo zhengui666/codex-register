@@ -24,7 +24,7 @@ dev = [
     "httpx>=0.24.0",
 ]
 payment = [
-    "playwright>=1.40.0",
+    "quickjs>=1.19.4",
 ]
 
 [project.scripts]

@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Optional
 
+from .fingerprint import build_request_context
+
 logger = logging.getLogger(__name__)
 
 
@@ -24,17 +26,16 @@ def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "
         代理 URL 字符串（如 http://user:pass@host:port），失败返回 None
     """
     try:
-        from curl_cffi import requests as cffi_requests
+        from .fingerprint import fingerprinted_get
 
         headers = {}
         if api_key:
             headers[api_key_header] = api_key
 
-        response = cffi_requests.get(
+        response = fingerprinted_get(
             api_url,
             headers=headers,
             timeout=10,
-            impersonate="chrome110"
         )
 
         if response.status_code != 200:

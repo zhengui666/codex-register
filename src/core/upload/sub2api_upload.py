@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional
 
-from curl_cffi import requests as cffi_requests
+from ..fingerprint import fingerprinted_get, fingerprinted_post
 
 from ...database.session import get_db
 from ...database.models import Account
@@ -106,13 +106,12 @@ def upload_to_sub2api(
     }
 
     try:
-        response = cffi_requests.post(
+        response = fingerprinted_post(
             url,
             json=payload,
             headers=headers,
             proxies=None,
             timeout=30,
-            impersonate="chrome110",
         )
 
         if response.status_code in (200, 201):
@@ -199,12 +198,11 @@ def test_sub2api_connection(api_url: str, api_key: str) -> Tuple[bool, str]:
     headers = {"x-api-key": api_key}
 
     try:
-        response = cffi_requests.get(
+        response = fingerprinted_get(
             url,
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
         )
 
         if response.status_code in (200, 201, 204, 405):

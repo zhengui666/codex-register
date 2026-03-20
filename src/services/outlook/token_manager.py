@@ -10,6 +10,7 @@ import time
 from typing import Dict, Optional, Any
 
 from curl_cffi import requests as _requests
+from src.core.fingerprint import random_browser_profile
 
 from .base import ProviderType, TokenEndpoint, TokenInfo
 from .account import OutlookAccount
@@ -162,7 +163,7 @@ class TokenManager:
                 headers=headers,
                 proxies=proxies,
                 timeout=self.timeout,
-                impersonate="chrome110",
+                impersonate=random_browser_profile()["impersonate"],
             )
 
             if resp.status_code != 200:

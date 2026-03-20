@@ -14,6 +14,7 @@ from curl_cffi.requests import Session, Response
 
 from ..config.constants import ERROR_MESSAGES
 from ..config.settings import get_settings
+from .fingerprint import build_request_context, build_session_kwargs
 
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,11 @@ class HTTPClient:
         """获取会话对象（单例）"""
         if self._session is None:
             self._session = Session(
-                proxies=self.proxies,
-                impersonate=self.config.impersonate,
-                verify=self.config.verify_ssl,
-                timeout=self.config.timeout
+                **build_session_kwargs(
+                    proxies=self.proxies,
+                    verify=self.config.verify_ssl,
+                    timeout=self.config.timeout,
+                )
             )
         return self._session
 
@@ -104,6 +106,10 @@ class HTTPClient:
         # 设置默认参数
         kwargs.setdefault("timeout", self.config.timeout)
         kwargs.setdefault("allow_redirects", self.config.follow_redirects)
+        if "impersonate" not in kwargs or "headers" not in kwargs:
+            context = build_request_context(kwargs.get("headers"))
+            kwargs.setdefault("impersonate", context["impersonate"])
+            kwargs["headers"] = context["headers"]
 
         # 添加代理配置
         if self.proxies and "proxies" not in kwargs:

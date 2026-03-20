@@ -3,20 +3,15 @@
 """
 
 import logging
-import subprocess
-import sys
 from typing import Optional
 
-from curl_cffi import requests as cffi_requests
-
 from ...database.models import Account
+from ..fingerprint import fingerprinted_get, fingerprinted_post, random_browser_profile
 
 logger = logging.getLogger(__name__)
 
 PAYMENT_CHECKOUT_URL = "https://chatgpt.com/backend-api/payments/checkout"
 TEAM_CHECKOUT_BASE_URL = "https://chatgpt.com/checkout/openai_llc/"
-
-
 def _build_proxies(proxy: Optional[str]) -> Optional[dict]:
     if proxy:
         return {"http": proxy, "https": proxy}
@@ -49,7 +44,7 @@ def _extract_oai_did(cookies_str: str) -> Optional[str]:
 
 
 def _parse_cookie_str(cookies_str: str, domain: str) -> list:
-    """将 'key=val; key2=val2' 格式解析为 Playwright cookie 列表"""
+    """将 'key=val; key2=val2' 格式解析为通用 cookie 列表"""
     cookies = []
     for part in cookies_str.split(";"):
         part = part.strip()
@@ -65,30 +60,21 @@ def _parse_cookie_str(cookies_str: str, domain: str) -> list:
     return cookies
 
 
-def _open_url_system_browser(url: str) -> bool:
-    """回退方案：调用系统浏览器以无痕模式打开"""
-    platform = sys.platform
+def _run_lightweight_js(script: str) -> Optional[str]:
+    """使用轻量级 JS 运行时执行简单脚本。"""
     try:
-        if platform == "win32":
-            for browser, flag in [("chrome", "--incognito"), ("msedge", "--inprivate")]:
-                try:
-                    subprocess.Popen(f'start {browser} {flag} "{url}"', shell=True)
-                    return True
-                except Exception:
-                    continue
-        elif platform == "darwin":
-            subprocess.Popen(["open", "-a", "Google Chrome", "--args", "--incognito", url])
-            return True
-        else:
-            for binary in ["google-chrome", "chromium-browser", "chromium"]:
-                try:
-                    subprocess.Popen([binary, "--incognito", url])
-                    return True
-                except FileNotFoundError:
-                    continue
+        import quickjs
+    except ImportError:
+        return None
+
+    ctx = quickjs.Context()
+    ctx.eval("var window = {}; var document = {}; var navigator = {};")
+    try:
+        result = ctx.eval(script)
+        return str(result) if result is not None else ""
     except Exception as e:
-        logger.warning(f"系统浏览器无痕打开失败: {e}")
-    return False
+        logger.warning(f"轻量级 JS 执行失败: {e}")
+        return None
 
 
 def generate_plus_link(
@@ -122,13 +108,12 @@ def generate_plus_link(
         "checkout_ui_mode": "custom",
     }
 
-    resp = cffi_requests.post(
+    resp = fingerprinted_post(
         PAYMENT_CHECKOUT_URL,
         headers=headers,
         json=payload,
         proxies=_build_proxies(proxy),
         timeout=30,
-        impersonate="chrome110",
     )
     resp.raise_for_status()
     data = resp.json()
@@ -177,13 +162,12 @@ def generate_team_link(
         "checkout_ui_mode": "custom",
     }
 
-    resp = cffi_requests.post(
+    resp = fingerprinted_post(
         PAYMENT_CHECKOUT_URL,
         headers=headers,
         json=payload,
         proxies=_build_proxies(proxy),
         timeout=30,
-        impersonate="chrome110",
     )
     resp.raise_for_status()
     data = resp.json()
@@ -192,31 +176,24 @@ def generate_team_link(
     raise ValueError(data.get("detail", "API 未返回 checkout_session_id"))
 
 
-def open_url_incognito(url: str, cookies_str: Optional[str] = None) -> bool:
-    """用 Playwright 以无痕模式打开 URL，可注入 cookie"""
-    import threading
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        logger.warning("playwright 未安装，回退到系统浏览器")
-        return _open_url_system_browser(url)
-
-    def _launch():
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=False, args=["--incognito"])
-                ctx = browser.new_context()
-                if cookies_str:
-                    ctx.add_cookies(_parse_cookie_str(cookies_str, "chatgpt.com"))
-                page = ctx.new_page()
-                page.goto(url)
-                # 保持窗口打开直到用户关闭
-                page.wait_for_timeout(300_000)  # 最多等待 5 分钟
-        except Exception as e:
-            logger.warning(f"Playwright 无痕打开失败: {e}")
-
-    threading.Thread(target=_launch, daemon=True).start()
-    return True
+def open_url_incognito(url: str, cookies_str: Optional[str] = None, headless: bool = True) -> bool:
+    """保留接口，但不启动任何本地浏览器进程。"""
+    profile = random_browser_profile()
+    _run_lightweight_js(
+        f"""
+        (function() {{
+            return {{
+                ua: {profile["user_agent"]!r},
+                lang: {profile["language"]!r},
+                tz: {profile["timezone"]!r},
+                width: {profile["screen"]["width"]},
+                height: {profile["screen"]["height"]}
+            }};
+        }})()
+        """
+    )
+    logger.info("已生成需要打开的 URL，但本版本不启动本地浏览器进程: %s", url)
+    return False
 
 
 def check_subscription_status(account: Account, proxy: Optional[str] = None) -> str:
@@ -234,12 +211,11 @@ def check_subscription_status(account: Account, proxy: Optional[str] = None) -> 
         "Content-Type": "application/json",
     }
 
-    resp = cffi_requests.get(
+    resp = fingerprinted_get(
         "https://chatgpt.com/backend-api/me",
         headers=headers,
         proxies=_build_proxies(proxy),
         timeout=20,
-        impersonate="chrome110",
     )
     resp.raise_for_status()
     data = resp.json()

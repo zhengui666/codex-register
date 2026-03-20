@@ -7,7 +7,7 @@ import logging
 from typing import List, Tuple
 from datetime import datetime
 
-from curl_cffi import requests as cffi_requests
+from src.core.fingerprint import fingerprinted_options, fingerprinted_post
 
 from ...database.session import get_db
 from ...database.models import Account
@@ -49,13 +49,12 @@ def upload_to_team_manager(
     }
 
     try:
-        resp = cffi_requests.post(
+        resp = fingerprinted_post(
             url,
             headers=headers,
             json=payload,
             proxies=None,
             timeout=30,
-            impersonate="chrome110",
         )
         if resp.status_code in (200, 201):
             return True, "上传成功"
@@ -138,12 +137,11 @@ def test_team_manager_connection(api_url: str, api_key: str) -> Tuple[bool, str]
     headers = {"X-API-Key": api_key}
 
     try:
-        resp = cffi_requests.options(
+        resp = fingerprinted_options(
             url,
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
         )
         if resp.status_code in (200, 204, 401, 403, 405):
             if resp.status_code == 401:

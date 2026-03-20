@@ -8,7 +8,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime
 
-from curl_cffi import requests as _requests
+from src.core.fingerprint import fingerprinted_get
 
 from ..base import ProviderType, EmailMessage
 from ..account import OutlookAccount
@@ -131,7 +131,7 @@ class GraphAPIProvider(OutlookProvider):
                 proxies = {"http": self.config.proxy_url, "https": self.config.proxy_url}
 
             # 发送请求（curl_cffi 自动对 params 进行 URL 编码）
-            resp = _requests.get(
+            resp = fingerprinted_get(
                 url,
                 params=params,
                 headers={
@@ -141,7 +141,6 @@ class GraphAPIProvider(OutlookProvider):
                 },
                 proxies=proxies,
                 timeout=self.config.timeout,
-                impersonate="chrome110",
             )
 
             if resp.status_code == 401:

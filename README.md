@@ -131,6 +131,33 @@ python webui.py
 
 启动后访问 http://127.0.0.1:8000
 
+## Docker 运行
+
+仓库的 GitHub Actions 会在推送 `v*` 标签时自动构建并推送镜像到 `ghcr.io/<owner>/<repo>`。
+
+Linux 上可直接使用仓库根目录的 `run-docker.sh` 启动：
+
+```bash
+bash run-docker.sh
+```
+
+脚本默认会：
+
+- 拉取 `ghcr.io/<owner>/<repo>:latest`
+- 持久化挂载 `./data` 到容器内 `/app/data`
+- 持久化挂载 `./logs` 到容器内 `/app/logs`
+- 将 `./.env` 挂载到容器内 `/app/.env`
+
+如果本地没有 `.env`，脚本会先从 `.env.example` 生成一个模板并退出，方便你补齐配置后再启动。
+
+如果镜像仓库是私有的，可以先设置：
+
+```bash
+export GHCR_USERNAME=你的 GitHub 用户名
+export GHCR_TOKEN=你的 GitHub Token
+bash run-docker.sh
+```
+
 ## 打包为可执行文件
 
 ```bash
@@ -172,7 +199,7 @@ codex-register-v2/
 | Web 框架 | FastAPI + Uvicorn |
 | 数据库 | SQLAlchemy + SQLite / PostgreSQL |
 | 模板引擎 | Jinja2 |
-| HTTP 客户端 | curl_cffi（浏览器指纹模拟） |
+| HTTP 客户端 | curl_cffi（随机 Chrome 风格指纹） |
 | 实时通信 | WebSocket |
 | 并发 | asyncio Semaphore + ThreadPoolExecutor |
 | 前端 | 原生 JavaScript（无框架） |
@@ -221,7 +248,7 @@ codex-register-v2/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/payment/generate-link` | 生成 Plus/Team 支付链接 |
-| POST | `/api/payment/open-incognito` | 后端无痕模式打开浏览器 |
+| POST | `/api/payment/open-incognito` | 后端执行轻量处理，不启动本地浏览器 |
 | POST | `/api/payment/accounts/{id}/mark-subscription` | 手动标记订阅类型 |
 | POST | `/api/payment/accounts/batch-check-subscription` | 批量检测订阅状态 |
 | POST | `/api/payment/accounts/{id}/upload-tm` | 上传单账号到 Team Manager |
@@ -320,7 +347,7 @@ docker-compose build --no-cache
 - CPA 上传始终直连，不经过代理
 - Team Manager 上传始终直连，不经过代理
 - 支付链接生成使用账号 access_token 鉴权，走全局代理配置
-- 无痕浏览器优先使用 playwright（注入 cookie 直达支付页）；未安装时降级为系统 Chrome/Edge 无痕模式
+- 支付相关链接仅做轻量处理与上下文准备，不会启动本地浏览器进程
 - 安装完整支付功能：`pip install playwright && playwright install chromium`（可选）
 - 订阅状态自动检测调用 `chatgpt.com/backend-api/me`，走全局代理
 - 批量注册并发数上限为 50，线程池大小已相应调整

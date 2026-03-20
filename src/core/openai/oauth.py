@@ -12,7 +12,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from curl_cffi import requests as cffi_requests
+from ..fingerprint import fingerprinted_post
 
 from ...config.constants import (
     OAUTH_CLIENT_ID,
@@ -151,19 +151,15 @@ def _post_form(
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
-
     try:
         # 使用 curl_cffi 发送请求，支持代理和浏览器指纹
-        response = cffi_requests.post(
+        response = fingerprinted_post(
             url,
             data=data,
             headers=headers,
             timeout=timeout,
             proxies=proxies,
-            impersonate="chrome"
         )
 
         if response.status_code != 200:

@@ -38,13 +38,13 @@ class GenerateLinkRequest(BaseModel):
     price_interval: str = "month"
     seat_quantity: int = 5
     proxy: Optional[str] = None
-    auto_open: bool = False  # 生成后是否自动无痕打开
+    auto_open: bool = False  # 生成后是否触发轻量处理，不启动本地浏览器
     country: str = "SG"  # 计费国家，决定货币  # 生成后是否自动无痕打开
 
 
 class OpenIncognitoRequest(BaseModel):
     url: str
-    account_id: Optional[int] = None  # 可选，用于注入账号 cookie
+    account_id: Optional[int] = None  # 可选，用于附带账号 cookie 上下文
 
 
 class MarkSubscriptionRequest(BaseModel):
@@ -78,7 +78,7 @@ class BatchUploadTMRequest(BaseModel):
 
 @router.post("/generate-link")
 def generate_payment_link(request: GenerateLinkRequest):
-    """生成 Plus 或 Team 支付链接，可选自动无痕打开"""
+    """生成 Plus 或 Team 支付链接，可选触发轻量处理"""
     with get_db() as db:
         account = db.query(Account).filter(Account.id == request.account_id).first()
         if not account:
@@ -121,7 +121,7 @@ def generate_payment_link(request: GenerateLinkRequest):
 
 @router.post("/open-incognito")
 def open_browser_incognito(request: OpenIncognitoRequest):
-    """后端以无痕模式打开指定 URL，可注入账号 cookie"""
+    """保留接口，但不再触发本地浏览器。"""
     if not request.url:
         raise HTTPException(status_code=400, detail="URL 不能为空")
 
@@ -134,8 +134,8 @@ def open_browser_incognito(request: OpenIncognitoRequest):
 
     success = open_url_incognito(request.url, cookies_str)
     if success:
-        return {"success": True, "message": "已在无痕模式打开浏览器"}
-    return {"success": False, "message": "未找到可用的浏览器，请手动复制链接"}
+        return {"success": True, "message": "已处理链接"}
+    return {"success": False, "message": "本版本不启动本地浏览器进程"}
 
 
 # ============== 订阅状态 ==============

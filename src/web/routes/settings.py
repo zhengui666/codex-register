@@ -177,15 +177,15 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
 
     # 用获取到的代理测试连通性
     import time
-    from curl_cffi import requests as cffi_requests
+    from src.core.fingerprint import fingerprinted_get
     try:
         proxies = {"http": proxy_url, "https": proxy_url}
         start = time.time()
-        resp = cffi_requests.get(
+        resp = fingerprinted_get(
             "https://api.ipify.org?format=json",
             proxies=proxies,
+            headers=None,
             timeout=10,
-            impersonate="chrome110"
         )
         elapsed = round((time.time() - start) * 1000)
         if resp.status_code == 200:
@@ -560,7 +560,7 @@ async def set_proxy_default(proxy_id: int):
 async def test_proxy_item(proxy_id: int):
     """测试单个代理"""
     import time
-    from curl_cffi import requests as cffi_requests
+    from src.core.fingerprint import fingerprinted_get
 
     with get_db() as db:
         proxy = crud.get_proxy_by_id(db, proxy_id)
@@ -576,12 +576,11 @@ async def test_proxy_item(proxy_id: int):
                 "http": proxy_url,
                 "https": proxy_url
             }
-
-            response = cffi_requests.get(
+            response = fingerprinted_get(
                 test_url,
                 proxies=proxies,
+                headers=None,
                 timeout=3,
-                impersonate="chrome110"
             )
 
             elapsed_time = time.time() - start_time
@@ -611,7 +610,7 @@ async def test_proxy_item(proxy_id: int):
 async def test_all_proxies():
     """测试所有启用的代理"""
     import time
-    from curl_cffi import requests as cffi_requests
+    from src.core.fingerprint import fingerprinted_get
 
     with get_db() as db:
         proxies = crud.get_enabled_proxies(db)
@@ -627,12 +626,11 @@ async def test_all_proxies():
                     "http": proxy_url,
                     "https": proxy_url
                 }
-
-                response = cffi_requests.get(
+                response = fingerprinted_get(
                     test_url,
                     proxies=proxies_dict,
+                    headers=None,
                     timeout=3,
-                    impersonate="chrome110"
                 )
 
                 elapsed_time = time.time() - start_time

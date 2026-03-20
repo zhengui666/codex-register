@@ -7,8 +7,8 @@ import logging
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 
-from curl_cffi import requests as cffi_requests
 from curl_cffi import CurlMime
+from ..fingerprint import fingerprinted_options, fingerprinted_post
 
 from ...database.session import get_db
 from ...database.models import Account
@@ -92,13 +92,12 @@ def upload_to_cpa(
             content_type="application/json",
         )
 
-        response = cffi_requests.post(
+        response = fingerprinted_post(
             upload_url,
             multipart=mime,
             headers=headers,
             proxies=None,
             timeout=30,
-            impersonate="chrome110",
         )
 
         if response.status_code in (200, 201):
@@ -222,12 +221,11 @@ def test_cpa_connection(api_url: str, api_token: str, proxy: str = None) -> Tupl
     headers = {"Authorization": f"Bearer {api_token}"}
 
     try:
-        response = cffi_requests.options(
+        response = fingerprinted_options(
             test_url,
             headers=headers,
             proxies=None,
             timeout=10,
-            impersonate="chrome110",
         )
 
         if response.status_code in (200, 204, 401, 403, 405):
