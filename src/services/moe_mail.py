@@ -40,7 +40,7 @@ class MeoMailEmailService(BaseEmailService):
                 - default_expiry: 默认过期时间（毫秒）
             name: 服务名称
         """
-        super().__init__(EmailServiceType.CUSTOM_DOMAIN, name)
+        super().__init__(EmailServiceType.MOE_MAIL, name)
 
         # 必需配置检查
         required_keys = ["base_url", "api_key"]

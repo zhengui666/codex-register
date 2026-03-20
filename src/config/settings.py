@@ -22,7 +22,7 @@ class SettingCategory(str, Enum):
     REGISTRATION = "registration"
     EMAIL = "email"
     TEMPMAIL = "tempmail"
-    CUSTOM_DOMAIN = "custom_domain"
+    CUSTOM_DOMAIN = "moe_mail"
     SECURITY = "security"
     CPA = "cpa"
 
@@ -252,7 +252,7 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
     # 邮箱服务配置
     "email_service_priority": SettingDefinition(
         db_key="email.service_priority",
-        default_value={"tempmail": 0, "outlook": 1, "custom_domain": 2},
+        default_value={"tempmail": 0, "outlook": 1, "moe_mail": 2},
         category=SettingCategory.EMAIL,
         description="邮箱服务优先级"
     ),
@@ -665,7 +665,7 @@ class Settings(BaseModel):
     registration_sleep_max: int = 30
 
     # 邮箱服务配置
-    email_service_priority: Dict[str, int] = {"tempmail": 0, "outlook": 1, "custom_domain": 2}
+    email_service_priority: Dict[str, int] = {"tempmail": 0, "outlook": 1, "moe_mail": 2}
 
     # Tempmail.lol 配置
     tempmail_base_url: str = "https://api.tempmail.lol/v2"

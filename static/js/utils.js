@@ -351,8 +351,10 @@ const statusMap = {
     service: {
         tempmail: 'Tempmail.lol',
         outlook: 'Outlook',
-        custom_domain: '自定义域名',
-        temp_mail: 'Temp-Mail（自部署）'
+        moe_mail: 'MoeMail',
+        temp_mail: 'Temp-Mail（自部署）',
+        duck_mail: 'DuckMail',
+        freemail: 'Freemail'
     }
 };
 

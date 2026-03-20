@@ -290,8 +290,8 @@ async def backup_database():
         raise HTTPException(status_code=404, detail="数据库文件不存在")
 
     # 创建备份目录
-    from fastapi import Path
-    backup_dir = Path(db_path).parent / "backups"
+    from pathlib import Path as FilePath
+    backup_dir = FilePath(db_path).parent / "backups"
     backup_dir.mkdir(exist_ok=True)
 
     # 生成备份文件名

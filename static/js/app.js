@@ -21,8 +21,10 @@ let toastShown = false;  // 标记是否已显示过 toast
 let availableServices = {
     tempmail: { available: true, services: [] },
     outlook: { available: false, services: [] },
-    custom_domain: { available: false, services: [] },
-    temp_mail: { available: false, services: [] }
+    moe_mail: { available: false, services: [] },
+    temp_mail: { available: false, services: [] },
+    duck_mail: { available: false, services: [] },
+    freemail: { available: false, services: [] }
 };
 
 // WebSocket 相关变量
@@ -291,15 +293,15 @@ function updateEmailServiceOptions() {
     }
 
     // 自定义域名
-    if (availableServices.custom_domain.available) {
+    if (availableServices.moe_mail.available) {
         const optgroup = document.createElement('optgroup');
-        optgroup.label = `🔗 自定义域名 (${availableServices.custom_domain.count} 个服务)`;
+        optgroup.label = `🔗 自定义域名 (${availableServices.moe_mail.count} 个服务)`;
 
-        availableServices.custom_domain.services.forEach(service => {
+        availableServices.moe_mail.services.forEach(service => {
             const option = document.createElement('option');
-            option.value = `custom_domain:${service.id || 'default'}`;
-            option.textContent = service.name;
-            option.dataset.type = 'custom_domain';
+            option.value = `moe_mail:${service.id || 'default'}`;
+            option.textContent = service.name + (service.default_domain ? ` (@${service.default_domain})` : '');
+            option.dataset.type = 'moe_mail';
             if (service.id) {
                 option.dataset.serviceId = service.id;
             }
@@ -336,6 +338,40 @@ function updateEmailServiceOptions() {
 
         select.appendChild(optgroup);
     }
+
+    // DuckMail
+    if (availableServices.duck_mail && availableServices.duck_mail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `🦆 DuckMail (${availableServices.duck_mail.count} 个服务)`;
+
+        availableServices.duck_mail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `duck_mail:${service.id}`;
+            option.textContent = service.name + (service.default_domain ? ` (@${service.default_domain})` : '');
+            option.dataset.type = 'duck_mail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
+
+    // Freemail
+    if (availableServices.freemail && availableServices.freemail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `📧 Freemail (${availableServices.freemail.count} 个服务)`;
+
+        availableServices.freemail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `freemail:${service.id}`;
+            option.textContent = service.name + (service.domain ? ` (@${service.domain})` : '');
+            option.dataset.type = 'freemail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
 }
 
 // 处理邮箱服务切换
@@ -344,8 +380,6 @@ function handleServiceChange(e) {
     if (!value) return;
 
     const [type, id] = value.split(':');
-    const selectedOption = e.target.options[e.target.selectedIndex];
-
     // 处理 Outlook 批量注册模式
     if (type === 'outlook_batch') {
         isOutlookBatchMode = true;
@@ -368,10 +402,25 @@ function handleServiceChange(e) {
         if (service) {
             addLog('info', `[系统] 已选择 Outlook 账户: ${service.name}`);
         }
-    } else if (type === 'custom_domain') {
-        const service = availableServices.custom_domain.services.find(s => s.id == id);
+    } else if (type === 'moe_mail') {
+        const service = availableServices.moe_mail.services.find(s => s.id == id);
         if (service) {
             addLog('info', `[系统] 已选择自定义域名服务: ${service.name}`);
+        }
+    } else if (type === 'temp_mail') {
+        const service = availableServices.temp_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Temp-Mail 自部署服务: ${service.name}`);
+        }
+    } else if (type === 'duck_mail') {
+        const service = availableServices.duck_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 DuckMail 服务: ${service.name}`);
+        }
+    } else if (type === 'freemail') {
+        const service = availableServices.freemail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Freemail 服务: ${service.name}`);
         }
     }
 }

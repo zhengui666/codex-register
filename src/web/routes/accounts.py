@@ -1,24 +1,46 @@
 """
 账号管理 API 路由
 """
-
+import io
 import json
 import logging
-from typing import List, Optional
+import zipfile
 from datetime import datetime
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ...database import crud
-from ...database.session import get_db
-from ...database.models import Account
 from ...config.constants import AccountStatus
 from ...config.settings import get_settings
+from ...core.openai.token_refresh import refresh_account_token as do_refresh
+from ...core.openai.token_refresh import validate_account_token as do_validate
+from ...core.upload.cpa_upload import generate_token_json, batch_upload_to_cpa, upload_to_cpa
+from ...core.upload.team_manager_upload import upload_to_team_manager, batch_upload_to_team_manager
+from ...core.upload.sub2api_upload import batch_upload_to_sub2api, upload_to_sub2api
+
+from ...core.dynamic_proxy import get_proxy_url_for_task
+from ...database import crud
+from ...database.models import Account
+from ...database.session import get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _get_proxy(request_proxy: Optional[str] = None) -> Optional[str]:
+    """获取代理 URL，策略与注册流程一致：代理列表 → 动态代理 → 静态配置"""
+    if request_proxy:
+        return request_proxy
+    with get_db() as db:
+        proxy = crud.get_random_proxy(db)
+        if proxy:
+            return proxy.proxy_url
+    proxy_url = get_proxy_url_for_task()
+    if proxy_url:
+        return proxy_url
+    return get_settings().proxy_url
 
 
 # ============== Pydantic Models ==============
@@ -477,10 +499,6 @@ async def export_accounts_sub2api(request: BatchExportRequest):
 @router.post("/export/cpa")
 async def export_accounts_cpa(request: BatchExportRequest):
     """导出账号为 CPA Token JSON 格式（每个账号单独一个 JSON 文件，打包为 ZIP）"""
-    import io
-    import zipfile
-    from ...core.upload.cpa_upload import generate_token_json
-
     with get_db() as db:
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
@@ -579,35 +597,10 @@ class BatchValidateRequest(BaseModel):
     search_filter: Optional[str] = None
 
 
-@router.post("/{account_id}/refresh")
-async def refresh_account_token(account_id: int, request: TokenRefreshRequest = None):
-    """刷新单个账号的 Token"""
-    from ...core.openai.token_refresh import refresh_account_token as do_refresh
-
-    # 使用传入的代理或全局代理配置
-    proxy = request.proxy if request and request.proxy else get_settings().proxy_url
-    result = do_refresh(account_id, proxy)
-
-    if result.success:
-        return {
-            "success": True,
-            "message": "Token 刷新成功",
-            "expires_at": result.expires_at.isoformat() if result.expires_at else None
-        }
-    else:
-        return {
-            "success": False,
-            "error": result.error_message
-        }
-
-
 @router.post("/batch-refresh")
 async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: BackgroundTasks):
     """批量刷新账号 Token"""
-    from ...core.openai.token_refresh import refresh_account_token as do_refresh
-
-    # 使用传入的代理或全局代理配置
-    proxy = request.proxy if request.proxy else get_settings().proxy_url
+    proxy = _get_proxy(request.proxy)
 
     results = {
         "success_count": 0,
@@ -636,29 +629,29 @@ async def batch_refresh_tokens(request: BatchRefreshRequest, background_tasks: B
     return results
 
 
-@router.post("/{account_id}/validate")
-async def validate_account_token(account_id: int, request: TokenValidateRequest = None):
-    """验证单个账号的 Token 有效性"""
-    from ...core.openai.token_refresh import validate_account_token as do_validate
+@router.post("/{account_id}/refresh")
+async def refresh_account_token(account_id: int, request: Optional[TokenRefreshRequest] = Body(default=None)):
+    """刷新单个账号的 Token"""
+    proxy = _get_proxy(request.proxy if request else None)
+    result = do_refresh(account_id, proxy)
 
-    # 使用传入的代理或全局代理配置
-    proxy = request.proxy if request and request.proxy else get_settings().proxy_url
-    is_valid, error = do_validate(account_id, proxy)
-
-    return {
-        "id": account_id,
-        "valid": is_valid,
-        "error": error
-    }
+    if result.success:
+        return {
+            "success": True,
+            "message": "Token 刷新成功",
+            "expires_at": result.expires_at.isoformat() if result.expires_at else None
+        }
+    else:
+        return {
+            "success": False,
+            "error": result.error_message
+        }
 
 
 @router.post("/batch-validate")
 async def batch_validate_tokens(request: BatchValidateRequest):
     """批量验证账号 Token 有效性"""
-    from ...core.openai.token_refresh import validate_account_token as do_validate
-
-    # 使用传入的代理或全局代理配置
-    proxy = request.proxy if request.proxy else get_settings().proxy_url
+    proxy = _get_proxy(request.proxy)
 
     results = {
         "valid_count": 0,
@@ -695,6 +688,19 @@ async def batch_validate_tokens(request: BatchValidateRequest):
     return results
 
 
+@router.post("/{account_id}/validate")
+async def validate_account_token(account_id: int, request: Optional[TokenValidateRequest] = Body(default=None)):
+    """验证单个账号的 Token 有效性"""
+    proxy = _get_proxy(request.proxy if request else None)
+    is_valid, error = do_validate(account_id, proxy)
+
+    return {
+        "id": account_id,
+        "valid": is_valid,
+        "error": error
+    }
+
+
 # ============== CPA 上传相关 ==============
 
 class CPAUploadRequest(BaseModel):
@@ -714,10 +720,36 @@ class BatchCPAUploadRequest(BaseModel):
     cpa_service_id: Optional[int] = None  # 指定 CPA 服务 ID，不传则使用全局配置
 
 
+@router.post("/batch-upload-cpa")
+async def batch_upload_accounts_to_cpa(request: BatchCPAUploadRequest):
+    """批量上传账号到 CPA"""
+
+    proxy = request.proxy if request.proxy else get_settings().proxy_url
+
+    # 解析指定的 CPA 服务
+    cpa_api_url = None
+    cpa_api_token = None
+    if request.cpa_service_id:
+        with get_db() as db:
+            svc = crud.get_cpa_service_by_id(db, request.cpa_service_id)
+            if not svc:
+                raise HTTPException(status_code=404, detail="指定的 CPA 服务不存在")
+            cpa_api_url = svc.api_url
+            cpa_api_token = svc.api_token
+
+    with get_db() as db:
+        ids = resolve_account_ids(
+            db, request.ids, request.select_all,
+            request.status_filter, request.email_service_filter, request.search_filter
+        )
+
+    results = batch_upload_to_cpa(ids, proxy, api_url=cpa_api_url, api_token=cpa_api_token)
+    return results
+
+
 @router.post("/{account_id}/upload-cpa")
-async def upload_account_to_cpa(account_id: int, request: CPAUploadRequest = None):
+async def upload_account_to_cpa(account_id: int, request: Optional[CPAUploadRequest] = Body(default=None)):
     """上传单个账号到 CPA"""
-    from ...core.upload.cpa_upload import upload_to_cpa, generate_token_json
 
     proxy = request.proxy if request and request.proxy else get_settings().proxy_url
     cpa_service_id = request.cpa_service_id if request else None
@@ -759,34 +791,6 @@ async def upload_account_to_cpa(account_id: int, request: CPAUploadRequest = Non
             return {"success": False, "error": message}
 
 
-@router.post("/batch-upload-cpa")
-async def batch_upload_accounts_to_cpa(request: BatchCPAUploadRequest):
-    """批量上传账号到 CPA"""
-    from ...core.upload.cpa_upload import batch_upload_to_cpa
-
-    proxy = request.proxy if request.proxy else get_settings().proxy_url
-
-    # 解析指定的 CPA 服务
-    cpa_api_url = None
-    cpa_api_token = None
-    if request.cpa_service_id:
-        with get_db() as db:
-            svc = crud.get_cpa_service_by_id(db, request.cpa_service_id)
-            if not svc:
-                raise HTTPException(status_code=404, detail="指定的 CPA 服务不存在")
-            cpa_api_url = svc.api_url
-            cpa_api_token = svc.api_token
-
-    with get_db() as db:
-        ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
-        )
-
-    results = batch_upload_to_cpa(ids, proxy, api_url=cpa_api_url, api_token=cpa_api_token)
-    return results
-
-
 class Sub2ApiUploadRequest(BaseModel):
     """单账号 Sub2API 上传请求"""
     service_id: Optional[int] = None
@@ -794,10 +798,59 @@ class Sub2ApiUploadRequest(BaseModel):
     priority: int = 50
 
 
+class BatchSub2ApiUploadRequest(BaseModel):
+    """批量 Sub2API 上传请求"""
+    ids: List[int] = []
+    select_all: bool = False
+    status_filter: Optional[str] = None
+    email_service_filter: Optional[str] = None
+    search_filter: Optional[str] = None
+    service_id: Optional[int] = None  # 指定 Sub2API 服务 ID，不传则使用第一个启用的
+    concurrency: int = 3
+    priority: int = 50
+
+
+@router.post("/batch-upload-sub2api")
+async def batch_upload_accounts_to_sub2api(request: BatchSub2ApiUploadRequest):
+    """批量上传账号到 Sub2API"""
+
+    # 解析指定的 Sub2API 服务
+    api_url = None
+    api_key = None
+    if request.service_id:
+        with get_db() as db:
+            svc = crud.get_sub2api_service_by_id(db, request.service_id)
+            if not svc:
+                raise HTTPException(status_code=404, detail="指定的 Sub2API 服务不存在")
+            api_url = svc.api_url
+            api_key = svc.api_key
+    else:
+        with get_db() as db:
+            svcs = crud.get_sub2api_services(db, enabled=True)
+            if svcs:
+                api_url = svcs[0].api_url
+                api_key = svcs[0].api_key
+
+    if not api_url or not api_key:
+        raise HTTPException(status_code=400, detail="未找到可用的 Sub2API 服务，请先在设置中配置")
+
+    with get_db() as db:
+        ids = resolve_account_ids(
+            db, request.ids, request.select_all,
+            request.status_filter, request.email_service_filter, request.search_filter
+        )
+
+    results = batch_upload_to_sub2api(
+        ids, api_url, api_key,
+        concurrency=request.concurrency,
+        priority=request.priority,
+    )
+    return results
+
+
 @router.post("/{account_id}/upload-sub2api")
-async def upload_account_to_sub2api(account_id: int, request: Sub2ApiUploadRequest = None):
+async def upload_account_to_sub2api(account_id: int, request: Optional[Sub2ApiUploadRequest] = Body(default=None)):
     """上传单个账号到 Sub2API"""
-    from ...core.upload.sub2api_upload import upload_to_sub2api
 
     service_id = request.service_id if request else None
     concurrency = request.concurrency if request else 3
@@ -839,52 +892,171 @@ async def upload_account_to_sub2api(account_id: int, request: Sub2ApiUploadReque
             return {"success": False, "error": message}
 
 
-class BatchSub2ApiUploadRequest(BaseModel):
-    """批量 Sub2API 上传请求"""
+# ============== Team Manager 上传 ==============
+
+class UploadTMRequest(BaseModel):
+    service_id: Optional[int] = None
+
+
+class BatchUploadTMRequest(BaseModel):
     ids: List[int] = []
     select_all: bool = False
     status_filter: Optional[str] = None
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
-    service_id: Optional[int] = None  # 指定 Sub2API 服务 ID，不传则使用第一个启用的
-    concurrency: int = 3
-    priority: int = 50
+    service_id: Optional[int] = None
 
 
-@router.post("/batch-upload-sub2api")
-async def batch_upload_accounts_to_sub2api(request: BatchSub2ApiUploadRequest):
-    """批量上传账号到 Sub2API"""
-    from ...core.upload.sub2api_upload import batch_upload_to_sub2api
-
-    # 解析指定的 Sub2API 服务
-    api_url = None
-    api_key = None
-    if request.service_id:
-        with get_db() as db:
-            svc = crud.get_sub2api_service_by_id(db, request.service_id)
-            if not svc:
-                raise HTTPException(status_code=404, detail="指定的 Sub2API 服务不存在")
-            api_url = svc.api_url
-            api_key = svc.api_key
-    else:
-        with get_db() as db:
-            svcs = crud.get_sub2api_services(db, enabled=True)
-            if svcs:
-                api_url = svcs[0].api_url
-                api_key = svcs[0].api_key
-
-    if not api_url or not api_key:
-        raise HTTPException(status_code=400, detail="未找到可用的 Sub2API 服务，请先在设置中配置")
+@router.post("/batch-upload-tm")
+async def batch_upload_accounts_to_tm(request: BatchUploadTMRequest):
+    """批量上传账号到 Team Manager"""
 
     with get_db() as db:
+        if request.service_id:
+            svc = crud.get_tm_service_by_id(db, request.service_id)
+        else:
+            svcs = crud.get_tm_services(db, enabled=True)
+            svc = svcs[0] if svcs else None
+
+        if not svc:
+            raise HTTPException(status_code=400, detail="未找到可用的 Team Manager 服务，请先在设置中配置")
+
+        api_url = svc.api_url
+        api_key = svc.api_key
+
         ids = resolve_account_ids(
             db, request.ids, request.select_all,
             request.status_filter, request.email_service_filter, request.search_filter
         )
 
-    results = batch_upload_to_sub2api(
-        ids, api_url, api_key,
-        concurrency=request.concurrency,
-        priority=request.priority,
-    )
+    results = batch_upload_to_team_manager(ids, api_url, api_key)
     return results
+
+
+@router.post("/{account_id}/upload-tm")
+async def upload_account_to_tm(account_id: int, request: Optional[UploadTMRequest] = Body(default=None)):
+    """上传单账号到 Team Manager"""
+
+    service_id = request.service_id if request else None
+
+    with get_db() as db:
+        if service_id:
+            svc = crud.get_tm_service_by_id(db, service_id)
+        else:
+            svcs = crud.get_tm_services(db, enabled=True)
+            svc = svcs[0] if svcs else None
+
+        if not svc:
+            raise HTTPException(status_code=400, detail="未找到可用的 Team Manager 服务，请先在设置中配置")
+
+        api_url = svc.api_url
+        api_key = svc.api_key
+
+        account = crud.get_account_by_id(db, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        success, message = upload_to_team_manager(account, api_url, api_key)
+
+    return {"success": success, "message": message}
+
+
+# ============== Inbox Code ==============
+
+def _build_inbox_config(db, service_type, email: str) -> dict:
+    """根据账号邮箱服务类型从数据库构建服务配置（不传 proxy_url）"""
+    from ...database.models import EmailService as EmailServiceModel
+    from ...services import EmailServiceType as EST
+
+    if service_type == EST.TEMPMAIL:
+        settings = get_settings()
+        return {
+            "base_url": settings.tempmail_base_url,
+            "timeout": settings.tempmail_timeout,
+            "max_retries": settings.tempmail_max_retries,
+        }
+
+    if service_type == EST.MOE_MAIL:
+        # 按域名后缀匹配，找不到则取 priority 最小的
+        domain = email.split("@")[1] if "@" in email else ""
+        services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "moe_mail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+        svc = None
+        for s in services:
+            cfg = s.config or {}
+            if cfg.get("default_domain") == domain or cfg.get("domain") == domain:
+                svc = s
+                break
+        if not svc and services:
+            svc = services[0]
+        if not svc:
+            return None
+        cfg = svc.config.copy()
+        if "api_url" in cfg and "base_url" not in cfg:
+            cfg["base_url"] = cfg.pop("api_url")
+        return cfg
+
+    # 其余服务类型：直接按 service_type 查数据库
+    type_map = {
+        EST.TEMP_MAIL: "temp_mail",
+        EST.DUCK_MAIL: "duck_mail",
+        EST.FREEMAIL: "freemail",
+        EST.OUTLOOK: "outlook",
+    }
+    db_type = type_map.get(service_type)
+    if not db_type:
+        return None
+
+    query = db.query(EmailServiceModel).filter(
+        EmailServiceModel.service_type == db_type,
+        EmailServiceModel.enabled == True
+    )
+    if service_type == EST.OUTLOOK:
+        # 按 config.email 匹配账号 email
+        services = query.all()
+        svc = next((s for s in services if (s.config or {}).get("email") == email), None)
+    else:
+        svc = query.order_by(EmailServiceModel.priority.asc()).first()
+
+    if not svc:
+        return None
+    cfg = svc.config.copy() if svc.config else {}
+    if "api_url" in cfg and "base_url" not in cfg:
+        cfg["base_url"] = cfg.pop("api_url")
+    return cfg
+
+
+@router.post("/{account_id}/inbox-code")
+async def get_account_inbox_code(account_id: int):
+    """查询账号邮箱收件箱最新验证码"""
+    from ...services import EmailServiceFactory, EmailServiceType
+
+    with get_db() as db:
+        account = crud.get_account_by_id(db, account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在")
+
+        try:
+            service_type = EmailServiceType(account.email_service)
+        except ValueError:
+            return {"success": False, "error": "不支持的邮箱服务类型"}
+
+        config = _build_inbox_config(db, service_type, account.email)
+        if config is None:
+            return {"success": False, "error": "未找到可用的邮箱服务配置"}
+
+        try:
+            svc = EmailServiceFactory.create(service_type, config)
+            code = svc.get_verification_code(
+                account.email,
+                email_id=account.email_service_id,
+                timeout=12
+            )
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+        if not code:
+            return {"success": False, "error": "未收到验证码邮件"}
+
+        return {"success": True, "code": code, "email": account.email}

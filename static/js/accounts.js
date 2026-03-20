@@ -329,6 +329,7 @@ function renderAccounts(accounts) {
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);refreshToken(${account.id})">刷新</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);uploadAccount(${account.id})">上传</a>
                             <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);markSubscription(${account.id})">标记</a>
+                            <a href="#" class="dropdown-item" onclick="event.preventDefault();closeMoreMenu(this);checkInboxCode(${account.id})">收件箱</a>
                         </div>
                     </div>
                     <button class="btn btn-danger btn-sm" onclick="deleteAccount(${account.id}, '${escapeHtml(account.email)}')">删除</button>
@@ -1075,11 +1076,82 @@ async function uploadToSub2Api(id) {
     }
 }
 
+// 弹出 Team Manager 服务选择框，返回 Promise<{service_id: number|null}|null>
+// null 表示用户取消，{service_id: null} 表示自动选择
+function selectTmService() {
+    return new Promise(async (resolve) => {
+        const modal = document.getElementById('tm-service-modal');
+        const listEl = document.getElementById('tm-service-list');
+        const closeBtn = document.getElementById('close-tm-modal');
+        const cancelBtn = document.getElementById('cancel-tm-modal-btn');
+        const autoBtn = document.getElementById('tm-use-auto-btn');
+
+        listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted)">加载中...</div>';
+        modal.classList.add('active');
+
+        let services = [];
+        try {
+            services = await api.get('/tm-services?enabled=true');
+        } catch (e) {
+            services = [];
+        }
+
+        if (services.length === 0) {
+            listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:12px;">暂无已启用的 Team Manager 服务，将自动选择第一个</div>';
+        } else {
+            listEl.innerHTML = services.map(s => `
+                <div class="tm-service-item" data-id="${s.id}" style="
+                    padding: 10px 14px;
+                    border: 1px solid var(--border);
+                    border-radius: 8px;
+                    cursor: pointer;
+                    transition: background 0.15s;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                ">
+                    <div>
+                        <div style="font-weight:500;">${escapeHtml(s.name)}</div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);">${escapeHtml(s.api_url)}</div>
+                    </div>
+                    <span class="badge" style="background:var(--primary);color:#fff;font-size:0.7rem;padding:2px 8px;border-radius:10px;">选择</span>
+                </div>
+            `).join('');
+
+            listEl.querySelectorAll('.tm-service-item').forEach(item => {
+                item.addEventListener('mouseenter', () => item.style.background = 'var(--surface-hover)');
+                item.addEventListener('mouseleave', () => item.style.background = '');
+                item.addEventListener('click', () => {
+                    cleanup();
+                    resolve({ service_id: parseInt(item.dataset.id) });
+                });
+            });
+        }
+
+        function cleanup() {
+            modal.classList.remove('active');
+            closeBtn.removeEventListener('click', onCancel);
+            cancelBtn.removeEventListener('click', onCancel);
+            autoBtn.removeEventListener('click', onAuto);
+        }
+        function onCancel() { cleanup(); resolve(null); }
+        function onAuto() { cleanup(); resolve({ service_id: null }); }
+
+        closeBtn.addEventListener('click', onCancel);
+        cancelBtn.addEventListener('click', onCancel);
+        autoBtn.addEventListener('click', onAuto);
+    });
+}
+
 // 上传单账号到 Team Manager
 async function uploadToTm(id) {
+    const choice = await selectTmService();
+    if (choice === null) return;
     try {
         toast.info('正在上传到 Team Manager...');
-        const result = await api.post(`/payment/accounts/${id}/upload-tm`);
+        const payload = {};
+        if (choice.service_id != null) payload.service_id = choice.service_id;
+        const result = await api.post(`/accounts/${id}/upload-tm`, payload);
         if (result.success) {
             toast.success('上传成功');
         } else {
@@ -1094,6 +1166,10 @@ async function uploadToTm(id) {
 async function handleBatchUploadTm() {
     const count = getEffectiveCount();
     if (count === 0) return;
+
+    const choice = await selectTmService();
+    if (choice === null) return;  // 用户取消
+
     const confirmed = await confirm(`确定要将选中的 ${count} 个账号上传到 Team Manager 吗？`);
     if (!confirmed) return;
 
@@ -1101,7 +1177,9 @@ async function handleBatchUploadTm() {
     elements.batchUploadBtn.textContent = '上传中...';
 
     try {
-        const result = await api.post('/payment/accounts/batch-upload-tm', buildBatchPayload());
+        const payload = buildBatchPayload();
+        if (choice.service_id != null) payload.service_id = choice.service_id;
+        const result = await api.post('/accounts/batch-upload-tm', payload);
         let message = `成功: ${result.success_count}`;
         if (result.failed_count > 0) message += `, 失败: ${result.failed_count}`;
         if (result.skipped_count > 0) message += `, 跳过: ${result.skipped_count}`;
@@ -1139,4 +1217,35 @@ async function saveCookies(id) {
     } catch (e) {
         toast.error('保存 Cookies 失败: ' + e.message);
     }
+}
+
+// 查询收件箱验证码
+async function checkInboxCode(id) {
+    toast.info('正在查询收件箱...');
+    try {
+        const result = await api.post(`/accounts/${id}/inbox-code`);
+        if (result.success) {
+            showInboxCodeResult(result.code, result.email);
+        } else {
+            toast.error('查询失败: ' + (result.error || '未收到验证码'));
+        }
+    } catch (error) {
+        toast.error('查询失败: ' + error.message);
+    }
+}
+
+function showInboxCodeResult(code, email) {
+    elements.modalBody.innerHTML = `
+        <div style="text-align:center; padding:24px 16px;">
+            <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                ${escapeHtml(email)} 最新验证码
+            </div>
+            <div style="font-size:36px;font-weight:700;letter-spacing:8px;
+                        color:var(--primary);font-family:monospace;margin-bottom:20px;">
+                ${escapeHtml(code)}
+            </div>
+            <button class="btn btn-primary" onclick="copyToClipboard('${escapeHtml(code)}')">复制验证码</button>
+        </div>
+    `;
+    elements.detailModal.classList.add('active');
 }

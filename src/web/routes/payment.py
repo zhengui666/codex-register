@@ -20,10 +20,6 @@ from ...core.openai.payment import (
     open_url_incognito,
     check_subscription_status,
 )
-from ...core.upload.team_manager_upload import (
-    upload_to_team_manager,
-    batch_upload_to_team_manager,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -56,20 +52,6 @@ class BatchCheckSubscriptionRequest(BaseModel):
     proxy: Optional[str] = None
     select_all: bool = False
     status_filter: Optional[str] = None
-    email_service_filter: Optional[str] = None
-    search_filter: Optional[str] = None
-
-
-class UploadTMRequest(BaseModel):
-    proxy: Optional[str] = None  # 保留，TM 上传不走代理
-    service_id: Optional[int] = None  # 指定 TM 服务 ID，不传则使用第一个启用的
-
-
-class BatchUploadTMRequest(BaseModel):
-    ids: List[int] = []
-    select_all: bool = False
-    status_filter: Optional[str] = None
-    service_id: Optional[int] = None  # 指定 TM 服务 ID，不传则使用第一个启用的
     email_service_filter: Optional[str] = None
     search_filter: Optional[str] = None
 
@@ -119,6 +101,12 @@ def generate_payment_link(request: GenerateLinkRequest):
     }
 
 
+@router.post("/generate")
+def generate_payment_link_legacy(request: GenerateLinkRequest):
+    """兼容主仓旧接口路径。"""
+    return generate_payment_link(request)
+
+
 @router.post("/open-incognito")
 def open_browser_incognito(request: OpenIncognitoRequest):
     """保留接口，但不再触发本地浏览器。"""
@@ -138,26 +126,13 @@ def open_browser_incognito(request: OpenIncognitoRequest):
     return {"success": False, "message": "本版本不启动本地浏览器进程"}
 
 
+@router.post("/open")
+def open_browser_legacy(request: OpenIncognitoRequest):
+    """兼容主仓旧接口路径。"""
+    return open_browser_incognito(request)
+
+
 # ============== 订阅状态 ==============
-
-@router.post("/accounts/{account_id}/mark-subscription")
-def mark_subscription(account_id: int, request: MarkSubscriptionRequest):
-    """手动标记账号订阅类型"""
-    allowed = ("free", "plus", "team")
-    if request.subscription_type not in allowed:
-        raise HTTPException(status_code=400, detail=f"subscription_type 必须为 {allowed}")
-
-    with get_db() as db:
-        account = db.query(Account).filter(Account.id == account_id).first()
-        if not account:
-            raise HTTPException(status_code=404, detail="账号不存在")
-
-        account.subscription_type = None if request.subscription_type == "free" else request.subscription_type
-        account.subscription_at = datetime.utcnow() if request.subscription_type != "free" else None
-        db.commit()
-
-    return {"success": True, "subscription_type": request.subscription_type}
-
 
 @router.post("/accounts/batch-check-subscription")
 def batch_check_subscription(request: BatchCheckSubscriptionRequest):
@@ -198,56 +173,21 @@ def batch_check_subscription(request: BatchCheckSubscriptionRequest):
     return results
 
 
-# ============== Team Manager 上传 ==============
-
-@router.post("/accounts/{account_id}/upload-tm")
-def upload_account_tm(account_id: int, request: UploadTMRequest = None):
-    """上传单账号到 Team Manager"""
-    service_id = request.service_id if request and hasattr(request, 'service_id') else None
+@router.post("/accounts/{account_id}/mark-subscription")
+def mark_subscription(account_id: int, request: MarkSubscriptionRequest):
+    """手动标记账号订阅类型"""
+    allowed = ("free", "plus", "team")
+    if request.subscription_type not in allowed:
+        raise HTTPException(status_code=400, detail=f"subscription_type 必须为 {allowed}")
 
     with get_db() as db:
-        if service_id:
-            svc = crud.get_tm_service_by_id(db, service_id)
-        else:
-            svcs = crud.get_tm_services(db, enabled=True)
-            svc = svcs[0] if svcs else None
-
-        if not svc:
-            raise HTTPException(status_code=400, detail="未找到可用的 Team Manager 服务，请先在设置中配置")
-
-        api_url = svc.api_url
-        api_key = svc.api_key
-
         account = db.query(Account).filter(Account.id == account_id).first()
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
-        success, message = upload_to_team_manager(account, api_url, api_key)
 
-    return {"success": success, "message": message}
+        account.subscription_type = None if request.subscription_type == "free" else request.subscription_type
+        account.subscription_at = datetime.utcnow() if request.subscription_type != "free" else None
+        db.commit()
 
+    return {"success": True, "subscription_type": request.subscription_type}
 
-@router.post("/accounts/batch-upload-tm")
-def batch_upload_tm(request: BatchUploadTMRequest):
-    """批量上传账号到 Team Manager"""
-    service_id = request.service_id if hasattr(request, 'service_id') else None
-
-    with get_db() as db:
-        if service_id:
-            svc = crud.get_tm_service_by_id(db, service_id)
-        else:
-            svcs = crud.get_tm_services(db, enabled=True)
-            svc = svcs[0] if svcs else None
-
-        if not svc:
-            raise HTTPException(status_code=400, detail="未找到可用的 Team Manager 服务，请先在设置中配置")
-
-        api_url = svc.api_url
-        api_key = svc.api_key
-
-        ids = resolve_account_ids(
-            db, request.ids, request.select_all,
-            request.status_filter, request.email_service_filter, request.search_filter
-        )
-
-    results = batch_upload_to_team_manager(ids, api_url, api_key)
-    return results

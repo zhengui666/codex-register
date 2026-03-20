@@ -205,12 +205,15 @@ def _normalize_email_service_config(
     if 'api_url' in normalized and 'base_url' not in normalized:
         normalized['base_url'] = normalized.pop('api_url')
 
-    if service_type == EmailServiceType.CUSTOM_DOMAIN:
+    if service_type == EmailServiceType.MOE_MAIL:
         if 'domain' in normalized and 'default_domain' not in normalized:
             normalized['default_domain'] = normalized.pop('domain')
-    elif service_type == EmailServiceType.TEMP_MAIL:
+    elif service_type in (EmailServiceType.TEMP_MAIL, EmailServiceType.FREEMAIL):
         if 'default_domain' in normalized and 'domain' not in normalized:
             normalized['domain'] = normalized.pop('default_domain')
+    elif service_type == EmailServiceType.DUCK_MAIL:
+        if 'domain' in normalized and 'default_domain' not in normalized:
+            normalized['default_domain'] = normalized.pop('domain')
 
     if proxy_url and 'proxy_url' not in normalized:
         normalized['proxy_url'] = proxy_url
@@ -288,11 +291,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         "max_retries": settings.tempmail_max_retries,
                         "proxy_url": actual_proxy_url,
                     }
-                elif service_type == EmailServiceType.CUSTOM_DOMAIN:
+                elif service_type == EmailServiceType.MOE_MAIL:
                     # 检查数据库中是否有可用的自定义域名服务
                     from ...database.models import EmailService as EmailServiceModel
                     db_service = db.query(EmailServiceModel).filter(
-                        EmailServiceModel.service_type == "custom_domain",
+                        EmailServiceModel.service_type == "moe_mail",
                         EmailServiceModel.enabled == True
                     ).order_by(EmailServiceModel.priority.asc()).first()
 
@@ -341,6 +344,34 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         logger.info(f"使用数据库 Outlook 账户: {selected_service.name}")
                     else:
                         raise ValueError("所有 Outlook 账户都已注册过 OpenAI 账号，请添加新的 Outlook 账户")
+                elif service_type == EmailServiceType.DUCK_MAIL:
+                    from ...database.models import EmailService as EmailServiceModel
+
+                    db_service = db.query(EmailServiceModel).filter(
+                        EmailServiceModel.service_type == "duck_mail",
+                        EmailServiceModel.enabled == True
+                    ).order_by(EmailServiceModel.priority.asc()).first()
+
+                    if db_service and db_service.config:
+                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
+                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        logger.info(f"使用数据库 DuckMail 服务: {db_service.name}")
+                    else:
+                        raise ValueError("没有可用的 DuckMail 邮箱服务，请先在邮箱服务页面添加服务")
+                elif service_type == EmailServiceType.FREEMAIL:
+                    from ...database.models import EmailService as EmailServiceModel
+
+                    db_service = db.query(EmailServiceModel).filter(
+                        EmailServiceModel.service_type == "freemail",
+                        EmailServiceModel.enabled == True
+                    ).order_by(EmailServiceModel.priority.asc()).first()
+
+                    if db_service and db_service.config:
+                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
+                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        logger.info(f"使用数据库 Freemail 服务: {db_service.name}")
+                    else:
+                        raise ValueError("没有可用的 Freemail 邮箱服务，请先在邮箱服务页面添加服务")
                 else:
                     config = email_service_config or {}
 
@@ -427,7 +458,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 # 自动上传到 Team Manager（可多服务）
                 if auto_upload_tm:
                     try:
-                        from ...core.upload.team_manager_upload import upload_account_to_tm
+                        from ...core.upload.team_manager_upload import upload_to_team_manager
                         from ...database.models import Account as AccountModel
                         saved_account = db.query(AccountModel).filter_by(email=result.email).first()
                         if saved_account and saved_account.access_token:
@@ -442,7 +473,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                                     if not _svc:
                                         continue
                                     log_callback(f"[TM] 上传到服务: {_svc.name}")
-                                    _ok, _msg = upload_account_to_tm(saved_account, _svc.api_url, _svc.api_key)
+                                    _ok, _msg = upload_to_team_manager(saved_account, _svc.api_url, _svc.api_key)
                                     log_callback(f"[TM] {'成功' if _ok else '失败'}({_svc.name}): {_msg}")
                                 except Exception as _e:
                                     log_callback(f"[TM] 异常({_sid}): {_e}")
@@ -765,7 +796,7 @@ async def start_registration(
     """
     启动注册任务
 
-    - email_service_type: 邮箱服务类型 (tempmail, outlook, custom_domain)
+    - email_service_type: 邮箱服务类型 (tempmail, outlook, moe_mail)
     - proxy: 代理地址
     - email_service_config: 邮箱服务配置（outlook 需要提供账户信息）
     """
@@ -1038,7 +1069,7 @@ async def get_available_email_services():
     返回所有已启用的邮箱服务，包括：
     - tempmail: 临时邮箱（无需配置）
     - outlook: 已导入的 Outlook 账户
-    - custom_domain: 已配置的自定义域名服务
+    - moe_mail: 已配置的自定义域名服务
     """
     from ...database.models import EmailService as EmailServiceModel
     from ...config.settings import get_settings
@@ -1060,12 +1091,22 @@ async def get_available_email_services():
             "count": 0,
             "services": []
         },
-        "custom_domain": {
+        "moe_mail": {
             "available": False,
             "count": 0,
             "services": []
         },
         "temp_mail": {
+            "available": False,
+            "count": 0,
+            "services": []
+        },
+        "duck_mail": {
+            "available": False,
+            "count": 0,
+            "services": []
+        },
+        "freemail": {
             "available": False,
             "count": 0,
             "services": []
@@ -1094,32 +1135,32 @@ async def get_available_email_services():
 
         # 获取自定义域名服务
         custom_services = db.query(EmailServiceModel).filter(
-            EmailServiceModel.service_type == "custom_domain",
+            EmailServiceModel.service_type == "moe_mail",
             EmailServiceModel.enabled == True
         ).order_by(EmailServiceModel.priority.asc()).all()
 
         for service in custom_services:
             config = service.config or {}
-            result["custom_domain"]["services"].append({
+            result["moe_mail"]["services"].append({
                 "id": service.id,
                 "name": service.name,
-                "type": "custom_domain",
+                "type": "moe_mail",
                 "default_domain": config.get("default_domain"),
                 "priority": service.priority
             })
 
-        result["custom_domain"]["count"] = len(custom_services)
-        result["custom_domain"]["available"] = len(custom_services) > 0
+        result["moe_mail"]["count"] = len(custom_services)
+        result["moe_mail"]["available"] = len(custom_services) > 0
 
         # 如果数据库中没有自定义域名服务，检查 settings
-        if not result["custom_domain"]["available"]:
+        if not result["moe_mail"]["available"]:
             if settings.custom_domain_base_url and settings.custom_domain_api_key:
-                result["custom_domain"]["available"] = True
-                result["custom_domain"]["count"] = 1
-                result["custom_domain"]["services"].append({
+                result["moe_mail"]["available"] = True
+                result["moe_mail"]["count"] = 1
+                result["moe_mail"]["services"].append({
                     "id": None,
                     "name": "默认自定义域名服务",
-                    "type": "custom_domain",
+                    "type": "moe_mail",
                     "from_settings": True
                 })
 
@@ -1141,6 +1182,42 @@ async def get_available_email_services():
 
         result["temp_mail"]["count"] = len(temp_mail_services)
         result["temp_mail"]["available"] = len(temp_mail_services) > 0
+
+        duck_mail_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "duck_mail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in duck_mail_services:
+            config = service.config or {}
+            result["duck_mail"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "duck_mail",
+                "default_domain": config.get("default_domain"),
+                "priority": service.priority
+            })
+
+        result["duck_mail"]["count"] = len(duck_mail_services)
+        result["duck_mail"]["available"] = len(duck_mail_services) > 0
+
+        freemail_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "freemail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in freemail_services:
+            config = service.config or {}
+            result["freemail"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "freemail",
+                "domain": config.get("domain"),
+                "priority": service.priority
+            })
+
+        result["freemail"]["count"] = len(freemail_services)
+        result["freemail"]["available"] = len(freemail_services) > 0
 
     return result
 
