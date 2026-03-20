@@ -4,17 +4,63 @@ CPA (Codex Protocol API) 上传功能
 
 import json
 import logging
+import urllib.parse
+from types import SimpleNamespace
 from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime
 
 from curl_cffi import CurlMime
-from ..fingerprint import fingerprinted_options, fingerprinted_post
+from curl_cffi import requests as curl_requests
+
+from ..fingerprint import fingerprinted_get, fingerprinted_post
 
 from ...database.session import get_db
 from ...database.models import Account
 from ...config.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+cffi_requests = SimpleNamespace(
+    post=fingerprinted_post,
+    get=fingerprinted_get,
+    exceptions=curl_requests.exceptions,
+)
+
+
+def _normalize_management_auth_files_url(api_url: str) -> str:
+    api_url = api_url.rstrip("/")
+    if api_url.endswith("/v0/management/auth-files"):
+        return api_url
+    if api_url.endswith("/v0/management"):
+        return f"{api_url}/auth-files"
+    return f"{api_url}/v0/management/auth-files"
+
+
+def _upload_raw_json(upload_url: str, file_content: bytes, filename: str, headers: Dict[str, str]) -> Tuple[bool, str]:
+    raw_headers = {
+        **headers,
+        "Content-Type": "application/json",
+    }
+    raw_url = f"{upload_url}?name={urllib.parse.quote(filename)}"
+    response = cffi_requests.post(
+        raw_url,
+        data=file_content,
+        headers=raw_headers,
+        proxies=None,
+        timeout=30,
+    )
+
+    if response.status_code in (200, 201):
+        return True, "上传成功"
+
+    error_msg = f"上传失败: HTTP {response.status_code}"
+    try:
+        error_detail = response.json()
+        if isinstance(error_detail, dict):
+            error_msg = error_detail.get("message", error_msg)
+    except Exception:
+        error_msg = f"{error_msg} - {response.text[:200]}"
+    return False, error_msg
 
 
 def generate_token_json(account: Account) -> dict:
@@ -73,8 +119,7 @@ def upload_to_cpa(
     if not effective_token:
         return False, "CPA API Token 未配置"
 
-    api_url = effective_url.rstrip("/")
-    upload_url = f"{api_url}/v0/management/auth-files"
+    upload_url = _normalize_management_auth_files_url(effective_url)
 
     filename = f"{token_data['email']}.json"
     file_content = json.dumps(token_data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -92,7 +137,7 @@ def upload_to_cpa(
             content_type="application/json",
         )
 
-        response = fingerprinted_post(
+        response = cffi_requests.post(
             upload_url,
             multipart=mime,
             headers=headers,
@@ -102,6 +147,9 @@ def upload_to_cpa(
 
         if response.status_code in (200, 201):
             return True, "上传成功"
+
+        if response.status_code == 404:
+            return _upload_raw_json(upload_url, file_content, filename, headers)
 
         error_msg = f"上传失败: HTTP {response.status_code}"
         try:
@@ -216,12 +264,11 @@ def test_cpa_connection(api_url: str, api_token: str, proxy: str = None) -> Tupl
     if not api_token:
         return False, "API Token 不能为空"
 
-    api_url = api_url.rstrip("/")
-    test_url = f"{api_url}/v0/management/auth-files"
+    test_url = _normalize_management_auth_files_url(api_url)
     headers = {"Authorization": f"Bearer {api_token}"}
 
     try:
-        response = fingerprinted_options(
+        response = cffi_requests.get(
             test_url,
             headers=headers,
             proxies=None,

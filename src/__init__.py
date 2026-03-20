@@ -7,7 +7,7 @@ from .database import get_db, Account, EmailService, RegistrationTask
 from .core import RegistrationEngine, RegistrationResult
 from .services import EmailServiceFactory, BaseEmailService
 
-__version__ = "2.0.0"
+__version__ = "0.1.3"
 __author__ = "Yasal"
 
 __all__ = [

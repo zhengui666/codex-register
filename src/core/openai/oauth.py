@@ -12,6 +12,8 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from curl_cffi import requests as cffi_requests
+
 from ..fingerprint import fingerprinted_post
 
 from ...config.constants import (
