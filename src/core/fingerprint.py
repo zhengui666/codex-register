@@ -15,7 +15,8 @@ from typing import Any, Optional
 from curl_cffi import requests as cffi_requests
 
 
-_CHROME_VERSIONS = [110, 111, 112, 116, 120, 124, 126, 128, 130]
+# Keep this list aligned with curl_cffi's documented impersonation targets.
+_CHROME_VERSIONS = [110, 116, 119, 120, 123, 124, 131, 136]
 _PLATFORMS = [
     "Windows",
     "Windows NT 10.0",
