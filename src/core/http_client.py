@@ -273,28 +273,52 @@ class OpenAIHTTPClient(HTTPClient):
 
     def check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """
-        检查 IP 地理位置
+        检查出口 IP 的大致地理位置。
 
-        Returns:
-            Tuple[是否支持, 位置信息]
+        只有明确解析到受限地区时才返回 False。
+        若外部探测接口暂时不可用，则返回 True, "UNKNOWN"，避免误伤注册流程。
         """
-        try:
-            response = self.get("https://cloudflare.com/cdn-cgi/trace", timeout=10)
-            trace_text = response.text
+        import re
 
-            # 解析位置信息
-            import re
-            loc_match = re.search(r"loc=([A-Z]+)", trace_text)
-            loc = loc_match.group(1) if loc_match else None
+        probes = [
+            "https://cloudflare.com/cdn-cgi/trace",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+            "https://ifconfig.co/json",
+            "https://ipapi.co/json",
+        ]
 
-            # 检查是否支持
-            if loc in ["CN", "HK", "MO", "TW"]:
-                return False, loc
-            return True, loc
+        last_error = None
+        for url in probes:
+            try:
+                response = self.get(url, timeout=10)
+                body = response.text.strip()
+                loc = None
 
-        except Exception as e:
-            logger.error(f"检查 IP 地理位置失败: {e}")
-            return False, None
+                if "cdn-cgi/trace" in url:
+                    loc_match = re.search(r"loc=([A-Z]+)", body)
+                    loc = loc_match.group(1) if loc_match else None
+                else:
+                    try:
+                        data = response.json()
+                    except Exception:
+                        data = json.loads(body)
+                    loc = (
+                        data.get("country")
+                        or data.get("country_code")
+                        or data.get("countryCode")
+                    )
+
+                if loc in ["CN", "HK", "MO", "TW"]:
+                    return False, loc
+                if loc:
+                    return True, loc
+            except Exception as e:
+                last_error = e
+                continue
+
+        if last_error:
+            logger.warning(f"检查 IP 地理位置失败，已降级继续注册: {last_error}")
+        return True, "UNKNOWN"
 
     def send_openai_request(
         self,
