@@ -372,6 +372,20 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                         logger.info(f"使用数据库 Freemail 服务: {db_service.name}")
                     else:
                         raise ValueError("没有可用的 Freemail 邮箱服务，请先在邮箱服务页面添加服务")
+                elif service_type == EmailServiceType.IMAP_MAIL:
+                    from ...database.models import EmailService as EmailServiceModel
+
+                    db_service = db.query(EmailServiceModel).filter(
+                        EmailServiceModel.service_type == "imap_mail",
+                        EmailServiceModel.enabled == True
+                    ).order_by(EmailServiceModel.priority.asc()).first()
+
+                    if db_service and db_service.config:
+                        config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
+                        crud.update_registration_task(db, task_uuid, email_service_id=db_service.id)
+                        logger.info(f"使用数据库 IMAP 邮箱服务: {db_service.name}")
+                    else:
+                        raise ValueError("没有可用的 IMAP 邮箱服务，请先在邮箱服务中添加")
                 else:
                     config = email_service_config or {}
 
@@ -1110,6 +1124,11 @@ async def get_available_email_services():
             "available": False,
             "count": 0,
             "services": []
+        },
+        "imap_mail": {
+            "available": False,
+            "count": 0,
+            "services": []
         }
     }
 
@@ -1218,6 +1237,25 @@ async def get_available_email_services():
 
         result["freemail"]["count"] = len(freemail_services)
         result["freemail"]["available"] = len(freemail_services) > 0
+
+        imap_mail_services = db.query(EmailServiceModel).filter(
+            EmailServiceModel.service_type == "imap_mail",
+            EmailServiceModel.enabled == True
+        ).order_by(EmailServiceModel.priority.asc()).all()
+
+        for service in imap_mail_services:
+            config = service.config or {}
+            result["imap_mail"]["services"].append({
+                "id": service.id,
+                "name": service.name,
+                "type": "imap_mail",
+                "email": config.get("email"),
+                "host": config.get("host"),
+                "priority": service.priority
+            })
+
+        result["imap_mail"]["count"] = len(imap_mail_services)
+        result["imap_mail"]["available"] = len(imap_mail_services) > 0
 
     return result
 
