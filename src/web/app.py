@@ -90,7 +90,9 @@ def create_app() -> FastAPI:
 
     # 模板引擎
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-    templates.env.globals["static_version"] = _build_static_asset_version(STATIC_DIR)
+    static_version = _build_static_asset_version(STATIC_DIR)
+    logger.info("模板全局 static_version=%r, type=%s", static_version, type(static_version).__name__)
+    templates.env.globals["static_version"] = static_version
 
     def _auth_token(password: str) -> str:
         secret = get_settings().webui_secret_key.get_secret_value().encode("utf-8")
@@ -139,6 +141,7 @@ def create_app() -> FastAPI:
         """首页 - 注册页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
+        logger.info("渲染首页请求路径: %s", request.url.path)
         return templates.TemplateResponse("index.html", {"request": request})
 
     @app.get("/accounts", response_class=HTMLResponse)
