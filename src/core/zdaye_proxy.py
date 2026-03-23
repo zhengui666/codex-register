@@ -474,6 +474,7 @@ def _build_request_url(api_url: str, api_key: str) -> str:
             "count": str(ZDAYE_CANDIDATE_COUNT),
             "return_type": "3",
             "dalu": query.get("dalu", "0"),
+            "adr": query.get("adr", "美国"),
             "protocol_type": query.get("protocol_type", "1"),
             "level_type": query.get("level_type", "1"),
             "lastcheck_type": query.get("lastcheck_type", "2"),

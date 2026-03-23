@@ -352,10 +352,10 @@ def test_fetch_zdaye_proxy_handles_invalid_payload(monkeypatch):
     assert result.error == "invalid_structure"
 
 
-def test_build_request_url_does_not_force_default_adr():
+def test_build_request_url_defaults_to_us_adr():
     built = _build_request_url("http://www.zdopen.com/FreeProxy/Get/?app_id=demo", "")
 
-    assert "adr=" not in built
+    assert "adr=%E7%BE%8E%E5%9B%BD" in built
 
 
 def test_fetch_zdaye_proxy_with_cache_uses_all_candidates_when_unbounded(monkeypatch):
