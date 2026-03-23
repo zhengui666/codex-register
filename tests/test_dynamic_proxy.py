@@ -232,7 +232,74 @@ def test_fetch_zdaye_proxy_with_cache_returns_cooldown_exhausted(monkeypatch):
 
     assert result.proxy_url is None
     assert result.error == "cooldown_exhausted"
-    assert result.message == "zdaye cooldown active and cached candidate pool exhausted"
+    assert result.message == "zdaye cooldown active and all cached candidates exhausted"
+
+
+def test_fetch_zdaye_proxy_with_cache_tries_beyond_three_candidates(monkeypatch):
+    store = {}
+
+    class DummySetting:
+        def __init__(self, value):
+            self.value = value
+
+    class DummyDB:
+        pass
+
+    class DummyContext:
+        def __enter__(self):
+            return DummyDB()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("src.database.session.get_db", lambda: DummyContext())
+    monkeypatch.setattr(
+        "src.database.crud.get_setting",
+        lambda db, key: DummySetting(store[key]) if key in store else None,
+    )
+    monkeypatch.setattr(
+        "src.database.crud.set_setting",
+        lambda db, key, value, description=None, category="general": store.__setitem__(key, value),
+    )
+    monkeypatch.setattr("src.core.zdaye_proxy.fingerprinted_get", lambda *args, **kwargs: SimpleNamespace(
+        status_code=200,
+        json=lambda: {
+            "code": "10001",
+            "msg": "ok",
+            "data": [
+                {"ip": "1.1.1.1", "port": 8001, "protocol": "http"},
+                {"ip": "2.2.2.2", "port": 8002, "protocol": "http"},
+                {"ip": "3.3.3.3", "port": 8003, "protocol": "http"},
+                {"ip": "4.4.4.4", "port": 8004, "protocol": "http"},
+            ],
+        },
+        text="",
+    ))
+    monkeypatch.setattr("src.core.zdaye_proxy.random.shuffle", lambda items: None)
+
+    seen = []
+
+    def fake_probe(proxy_url):
+        seen.append(proxy_url)
+        if proxy_url == "http://4.4.4.4:8004":
+            return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", verified=True)
+        return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", error="probe_failed", message="down")
+
+    monkeypatch.setattr("src.core.zdaye_proxy.probe_proxy_connectivity", fake_probe)
+
+    result = fetch_zdaye_proxy_with_cache(
+        "http://www.zdopen.com/FreeProxy/Get/?app_id=demo",
+        cooldown_seconds=600,
+    )
+
+    assert result.verified is True
+    assert result.proxy_url == "http://4.4.4.4:8004"
+    assert seen == [
+        "http://1.1.1.1:8001",
+        "http://2.2.2.2:8002",
+        "http://3.3.3.3:8003",
+        "http://4.4.4.4:8004",
+    ]
 
 
 def test_fetch_zdaye_proxy_handles_invalid_payload(monkeypatch):

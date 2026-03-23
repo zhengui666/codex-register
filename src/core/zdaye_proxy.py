@@ -108,7 +108,7 @@ def fetch_zdaye_proxy_with_cache(
     api_key: str = "",
     cooldown_seconds: int = 600,
     max_candidates: int = ZDAYE_CANDIDATE_COUNT,
-    max_attempts: int = 3,
+    max_attempts: int = 0,
 ) -> DynamicProxyFetchResult:
     from ..database import crud
     from ..database.session import get_db
@@ -138,8 +138,10 @@ def fetch_zdaye_proxy_with_cache(
         ordered_candidates = _order_cached_candidates(cache)
         attempted = 0
 
+        attempt_limit = max_attempts if max_attempts and max_attempts > 0 else len(ordered_candidates)
+
         for candidate in ordered_candidates:
-            if attempted >= max_attempts:
+            if attempted >= attempt_limit:
                 break
             attempted += 1
 
@@ -163,10 +165,15 @@ def fetch_zdaye_proxy_with_cache(
 
         _save_cached_pool(db, cache)
         if cache.cooldown_until > int(time.time()):
+            exhausted_pool = attempted >= len(ordered_candidates)
             return DynamicProxyFetchResult(
                 provider=ZDAYE_PROVIDER_NAME,
-                error="cooldown_exhausted",
-                message="zdaye cooldown active and cached candidate pool exhausted",
+                error="cooldown_exhausted" if exhausted_pool else "cooldown_retry_limit_reached",
+                message=(
+                    "zdaye cooldown active and all cached candidates exhausted"
+                    if exhausted_pool
+                    else "zdaye cooldown active and max cached candidate attempts reached"
+                ),
                 checked_candidates=attempted,
                 total_candidates=len(cache.candidates),
                 candidates=list(cache.candidates),

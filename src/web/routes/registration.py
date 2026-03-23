@@ -273,7 +273,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     log_callback(f"[代理] {proxy_source}")
 
             if not actual_proxy_url:
-                error_message = proxy_error or "zdaye cooldown active and cached candidate pool exhausted"
+                error_message = proxy_error or "zdaye cooldown active and all cached candidates exhausted"
                 log_callback(f"[代理] Zdaye 候选池不可用，当前账号终止: {error_message}")
                 crud.update_registration_task(
                     db,
