@@ -611,6 +611,31 @@ class RegistrationEngine:
 
         return None
 
+    def _extract_workspace_id_from_continue_url(self, continue_url: str) -> Optional[str]:
+        """从 continue_url 中提取 Workspace ID"""
+        raw = (continue_url or "").strip()
+        if not raw:
+            return None
+
+        try:
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(raw)
+            query = parse_qs(parsed.query)
+            for key in ("workspace_id", "workspaceId", "workspace"):
+                value = str((query.get(key) or [""])[0]).strip()
+                if value:
+                    return value
+
+            for bit in parsed.path.split("/"):
+                bit = bit.strip()
+                if bit.startswith("workspace_") or bit.startswith("ws_"):
+                    return bit
+        except Exception:
+            pass
+
+        return self._find_workspace_id_in_data(raw)
+
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
         try:
@@ -624,6 +649,12 @@ class RegistrationEngine:
                     f"创建账户响应未命中 workspace_id，顶层 keys: {list(self.create_account_response_data.keys())}",
                     "warning",
                 )
+                continue_url = str(self.create_account_response_data.get("continue_url") or "").strip()
+                if continue_url:
+                    workspace_id = self._extract_workspace_id_from_continue_url(continue_url)
+                    if workspace_id:
+                        self._log(f"从 continue_url 中获取到 Workspace ID: {workspace_id}")
+                        return workspace_id
             elif self.create_account_response_data is not None:
                 self._log(
                     f"创建账户响应类型: {type(self.create_account_response_data).__name__}",
@@ -636,6 +667,7 @@ class RegistrationEngine:
                 return None
 
             prioritized_cookie_names = [
+                "oai-client-auth-info",
                 "oai-client-auth-session",
                 "__Secure-next-auth.session-token",
             ]
