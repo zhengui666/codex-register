@@ -745,6 +745,10 @@ class RegistrationEngine:
             for i in range(max_redirects):
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
+                if "/add-phone" in current_url:
+                    self._log("当前流程进入 add-phone 页面，OpenAI 要求手机号验证，无法继续自动完成 OAuth 回调", "error")
+                    return None
+
                 response = self.session.get(
                     current_url,
                     allow_redirects=False,
@@ -756,6 +760,10 @@ class RegistrationEngine:
                 # 如果不是重定向状态码，停止
                 if response.status_code not in [301, 302, 303, 307, 308]:
                     self._log(f"非重定向状态码: {response.status_code}")
+                    response_text = (response.text or "")[:5000]
+                    if "/add-phone" in current_url or "add-phone" in response_text:
+                        self._log("响应页面为 add-phone，当前账号需要手机号验证，自动注册流程无法继续", "error")
+                        return None
                     break
 
                 if not location:
