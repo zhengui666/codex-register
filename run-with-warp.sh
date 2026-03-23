@@ -16,6 +16,12 @@ if is_true "${WARP_ENABLED:-0}"; then
     if ! pgrep -x warp-svc >/dev/null 2>&1; then
       nohup warp-svc >/tmp/warp-svc.log 2>&1 &
     fi
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+      if ss -xlp 2>/dev/null | grep -q "/run/cloudflare-warp/warp_service"; then
+        break
+      fi
+      sleep 1
+    done
   fi
 
   if command -v warp-cli >/dev/null 2>&1; then
@@ -33,7 +39,13 @@ if is_true "${WARP_ENABLED:-0}"; then
     fi
 
     warp-cli set-mode proxy >/tmp/warp-mode.log 2>&1 || warp-cli mode proxy >/tmp/warp-mode.log 2>&1 || true
-    warp-cli connect >/tmp/warp-connect.log 2>&1 || true
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      warp-cli connect >/tmp/warp-connect.log 2>&1 || true
+      if warp-cli status >/tmp/warp-status.log 2>&1 && ! grep -qi "error\|inactive\|registration delete required" /tmp/warp-status.log 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
   fi
 fi
 
