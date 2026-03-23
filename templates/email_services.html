@@ -211,6 +211,7 @@
                             <option value="tempmail">TempMail（自部署 Cloudflare Worker）</option>
                             <option value="duckmail">DuckMail（DuckMail API）</option>
                             <option value="freemail">Freemail（自部署 Cloudflare Worker）</option>
+                            <option value="imap">标准 IMAP（Gmail/QQ/163等）</option>
                         </select>
                     </div>
                     <!-- MoeMail 字段 -->
@@ -275,6 +276,35 @@
                         <div class="form-group">
                             <label for="custom-fm-domain">邮箱域名 (可选)</label>
                             <input type="text" id="custom-fm-domain" name="fm_domain" placeholder="example.com">
+                        </div>
+                    </div>
+                    <!-- IMAP 字段 -->
+                    <div id="add-imap-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="custom-imap-host">IMAP 服务器</label>
+                            <input type="text" id="custom-imap-host" name="imap_host" placeholder="imap.gmail.com / imap.qq.com / imap.163.com">
+                            <small style="color: var(--text-muted);">Gmail: imap.gmail.com | QQ: imap.qq.com | 163: imap.163.com</small>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="custom-imap-port">端口</label>
+                                <input type="number" id="custom-imap-port" name="imap_port" value="993" min="1" max="65535">
+                            </div>
+                            <div class="form-group">
+                                <label for="custom-imap-use-ssl">加密方式</label>
+                                <select id="custom-imap-use-ssl" name="imap_use_ssl">
+                                    <option value="true">SSL（端口 993）</option>
+                                    <option value="false">STARTTLS（端口 143）</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-imap-email">邮箱地址</label>
+                            <input type="email" id="custom-imap-email" name="imap_email" placeholder="your@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-imap-password">密码 / 授权码</label>
+                            <input type="password" id="custom-imap-password" name="imap_password" placeholder="Gmail 需使用 App Password，QQ/163 需使用授权码">
                         </div>
                     </div>
                     <div class="form-row">
@@ -384,6 +414,35 @@
                         <div class="form-group">
                             <label for="edit-fm-domain">邮箱域名 (可选)</label>
                             <input type="text" id="edit-fm-domain" name="fm_domain" placeholder="example.com">
+                        </div>
+                    </div>
+                    <!-- IMAP 字段 -->
+                    <div id="edit-imap-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="edit-imap-host">IMAP 服务器</label>
+                            <input type="text" id="edit-imap-host" name="imap_host" placeholder="imap.gmail.com">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="edit-imap-port">端口</label>
+                                <input type="number" id="edit-imap-port" name="imap_port" value="993" min="1" max="65535">
+                            </div>
+                            <div class="form-group">
+                                <label for="edit-imap-use-ssl">加密方式</label>
+                                <select id="edit-imap-use-ssl" name="imap_use_ssl">
+                                    <option value="true">SSL（端口 993）</option>
+                                    <option value="false">STARTTLS（端口 143）</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-imap-email">邮箱地址</label>
+                            <input type="email" id="edit-imap-email" name="imap_email" placeholder="your@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-imap-password">密码 / 授权码</label>
+                            <input type="password" id="edit-imap-password" name="imap_password" placeholder="留空则保持原值不变">
+                            <small style="color: var(--text-muted);">留空则保持原值不变</small>
                         </div>
                     </div>
                     <div class="form-row">

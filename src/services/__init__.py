@@ -16,6 +16,7 @@ from .moe_mail import MeoMailEmailService
 from .temp_mail import TempMailService
 from .duck_mail import DuckMailService
 from .freemail import FreemailService
+from .imap_mail import ImapMailService
 
 # 注册服务
 EmailServiceFactory.register(EmailServiceType.TEMPMAIL, TempmailService)
@@ -24,6 +25,7 @@ EmailServiceFactory.register(EmailServiceType.MOE_MAIL, MeoMailEmailService)
 EmailServiceFactory.register(EmailServiceType.TEMP_MAIL, TempMailService)
 EmailServiceFactory.register(EmailServiceType.DUCK_MAIL, DuckMailService)
 EmailServiceFactory.register(EmailServiceType.FREEMAIL, FreemailService)
+EmailServiceFactory.register(EmailServiceType.IMAP_MAIL, ImapMailService)
 
 # 导出 Outlook 模块的额外内容
 from .outlook.base import (
@@ -56,6 +58,7 @@ __all__ = [
     'TempMailService',
     'DuckMailService',
     'FreemailService',
+    'ImapMailService',
     # Outlook 模块
     'ProviderType',
     'EmailMessage',

@@ -146,6 +146,7 @@ async def get_email_services_stats():
             'temp_mail_count': 0,
             'duck_mail_count': 0,
             'freemail_count': 0,
+            'imap_mail_count': 0,
             'tempmail_available': True,  # 临时邮箱始终可用
             'enabled_count': enabled_count
         }
@@ -161,6 +162,8 @@ async def get_email_services_stats():
                 stats['duck_mail_count'] = count
             elif service_type == 'freemail':
                 stats['freemail_count'] = count
+            elif service_type == 'imap_mail':
+                stats['imap_mail_count'] = count
 
         return stats
 
@@ -230,6 +233,18 @@ async def get_service_types():
                     {"name": "base_url", "label": "API 地址", "required": True, "placeholder": "https://freemail.example.com"},
                     {"name": "admin_token", "label": "Admin Token", "required": True, "secret": True},
                     {"name": "domain", "label": "邮箱域名", "required": False, "placeholder": "example.com"},
+                ]
+            },
+            {
+                "value": "imap_mail",
+                "label": "IMAP 邮箱",
+                "description": "标准 IMAP 协议邮箱（Gmail/QQ/163等），仅用于接收验证码，强制直连",
+                "config_fields": [
+                    {"name": "host", "label": "IMAP 服务器", "required": True, "placeholder": "imap.gmail.com"},
+                    {"name": "port", "label": "端口", "required": False, "default": 993},
+                    {"name": "use_ssl", "label": "使用 SSL", "required": False, "default": True},
+                    {"name": "email", "label": "邮箱地址", "required": True},
+                    {"name": "password", "label": "密码/授权码", "required": True, "secret": True},
                 ]
             }
         ]
