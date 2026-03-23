@@ -106,23 +106,25 @@ def create_app() -> FastAPI:
     def _redirect_to_login(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/login?next={request.url.path}", status_code=302)
 
+    def _render_template(name: str, context: dict) -> HTMLResponse:
+        template = templates.env.get_template(name)
+        return HTMLResponse(template.render(context))
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request, next: Optional[str] = "/"):
         """登录页面"""
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "", "next": next or "/"}
-        )
+        return _render_template("login.html", {"request": request, "error": "", "next": next or "/"})
 
     @app.post("/login")
     async def login_submit(request: Request, password: str = Form(...), next: Optional[str] = "/"):
         """处理登录提交"""
         expected = get_settings().webui_access_password.get_secret_value()
         if not secrets.compare_digest(password, expected):
-            return templates.TemplateResponse(
-                "login.html",
-                {"request": request, "error": "密码错误", "next": next or "/"},
-                status_code=401
+            return HTMLResponse(
+                templates.env.get_template("login.html").render(
+                    {"request": request, "error": "密码错误", "next": next or "/"}
+                ),
+                status_code=401,
             )
 
         response = RedirectResponse(url=next or "/", status_code=302)
@@ -142,33 +144,33 @@ def create_app() -> FastAPI:
         if not _is_authenticated(request):
             return _redirect_to_login(request)
         logger.info("渲染首页请求路径: %s", request.url.path)
-        return templates.TemplateResponse("index.html", {"request": request})
+        return _render_template("index.html", {"request": request})
 
     @app.get("/accounts", response_class=HTMLResponse)
     async def accounts_page(request: Request):
         """账号管理页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("accounts.html", {"request": request})
+        return _render_template("accounts.html", {"request": request})
 
     @app.get("/email-services", response_class=HTMLResponse)
     async def email_services_page(request: Request):
         """邮箱服务管理页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("email_services.html", {"request": request})
+        return _render_template("email_services.html", {"request": request})
 
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         """设置页面"""
         if not _is_authenticated(request):
             return _redirect_to_login(request)
-        return templates.TemplateResponse("settings.html", {"request": request})
+        return _render_template("settings.html", {"request": request})
 
     @app.get("/payment", response_class=HTMLResponse)
     async def payment_page(request: Request):
         """支付页面"""
-        return templates.TemplateResponse("payment.html", {"request": request})
+        return _render_template("payment.html", {"request": request})
 
     @app.on_event("startup")
     async def startup_event():
