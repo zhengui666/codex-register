@@ -657,6 +657,10 @@ class Settings(BaseModel):
     @property
     def proxy_url(self) -> Optional[str]:
         """获取完整的代理 URL"""
+        warp_proxy_url = os.getenv("WARP_PROXY_URL")
+        if os.getenv("WARP_ENABLED", "").lower() in {"1", "true", "yes", "on"} and warp_proxy_url:
+            return warp_proxy_url
+
         if not self.proxy_enabled:
             return None
 

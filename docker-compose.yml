@@ -5,11 +5,17 @@ services:
     build: .
     ports:
       - "1455:1455"
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       - WEBUI_HOST=0.0.0.0
       - WEBUI_PORT=1455
       - DEBUG=0
       - LOG_LEVEL=info
+      - WARP_ENABLED=1
+      - WARP_PROXY_URL=socks5h://127.0.0.1:40000
       # 如果需要访问密码，可以在这里取消注释并设置
       # - WEBUI_ACCESS_PASSWORD=your_secure_password
     volumes:

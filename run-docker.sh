@@ -11,6 +11,13 @@ HOST_PORT="${APP_PORT:-8000}"
 CONTAINER_PORT="${CONTAINER_PORT:-8000}"
 IMAGE_REPO="${IMAGE_REPO:-}"
 TAG="${IMAGE_TAG:-latest}"
+WARP_ENABLED="${WARP_ENABLED:-0}"
+WARP_PROXY_URL="${WARP_PROXY_URL:-socks5h://127.0.0.1:40000}"
+
+warp_run_flags=()
+if [[ "$WARP_ENABLED" == "1" || "$WARP_ENABLED" == "true" || "$WARP_ENABLED" == "yes" ]]; then
+  warp_run_flags+=(--cap-add=NET_ADMIN --device=/dev/net/tun)
+fi
 
 detect_repo() {
   local remote_url repo_path
@@ -79,6 +86,9 @@ start_container() {
     -v "$ENV_FILE:/app/.env:ro" \
     -e APP_DATA_DIR=/app/data \
     -e APP_LOGS_DIR=/app/logs \
+    -e WARP_ENABLED="$WARP_ENABLED" \
+    -e WARP_PROXY_URL="$WARP_PROXY_URL" \
+    "${warp_run_flags[@]}" \
     --env-file "$ENV_FILE" \
     "${image}:${TAG}"
 

@@ -1,36 +1,29 @@
 FROM python:3.10-slim
 
-# Install system dependencies for the app and lightweight JS runtime
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    build-essential \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl ca-certificates build-essential python3-dev gnupg && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    mkdir -p /usr/share/keyrings; \
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ bullseye main" > /etc/apt/sources.list.d/cloudflare-client.list; \
+    apt-get update; \
+    apt-get install -y cloudflare-warp; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 容器运行时使用固定的数据和日志目录
 ENV APP_DATA_DIR=/app/data
 ENV APP_LOGS_DIR=/app/logs
 
-# Copy requirements first for better caching
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . .
-
-# Create data directory
+RUN chmod +x /app/run-with-warp.sh
 RUN mkdir -p data logs
 
-# Expose port
 EXPOSE 8000
 
-# Environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Run the application
-CMD ["python", "webui.py"]
+CMD ["/app/run-with-warp.sh"]
