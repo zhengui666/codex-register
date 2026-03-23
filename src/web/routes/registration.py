@@ -32,7 +32,7 @@ batch_tasks: Dict[str, dict] = {}
 # ============== Proxy Helper Functions ==============
 
 
-def get_zdaye_proxy_for_registration(max_retries: int = 3) -> Tuple[Optional[str], Optional[str], str]:
+def get_zdaye_proxy_for_registration(max_retries: int = 0) -> Tuple[Optional[str], Optional[str], str]:
     """
     为单个注册任务获取 Zdaye 动态代理。
 
@@ -256,9 +256,9 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
             # 为当前账号分配一个 Zdaye 代理
             actual_proxy_url = None
-            max_proxy_retries = 3
+            max_proxy_retries = 0
 
-            log_callback(f"[代理] 开始为当前账号分配 Zdaye 代理，最多尝试 {max_proxy_retries} 个缓存候选")
+            log_callback("[代理] 开始为当前账号分配 Zdaye 代理，将尝试当前缓存池中的可用候选")
             actual_proxy_url, proxy_error, proxy_source = get_zdaye_proxy_for_registration(
                 max_retries=max_proxy_retries
             )
