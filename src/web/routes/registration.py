@@ -34,36 +34,12 @@ batch_tasks: Dict[str, dict] = {}
 
 def get_zdaye_proxy_for_registration(max_retries: int = 0) -> Tuple[Optional[str], Optional[str], str]:
     """
-    为单个注册任务获取 Zdaye 动态代理。
+    Zdaye 代理服务已取消，注册任务不再分配动态代理。
 
     Returns:
         Tuple[proxy_url, error_message, source_message]
     """
-    from ...core.zdaye_proxy import fetch_zdaye_proxy_with_cache, is_zdaye_free_proxy_api
-
-    settings = get_settings()
-    api_url = (settings.proxy_dynamic_api_url or "").strip()
-
-    if not settings.proxy_dynamic_enabled:
-        return None, "未启用动态代理，无法为注册任务分配 Zdaye 代理", ""
-    if not api_url:
-        return None, "未配置动态代理 API 地址，无法为注册任务分配 Zdaye 代理", ""
-    if not is_zdaye_free_proxy_api(api_url):
-        return None, "当前动态代理 API 不是 Zdaye 免费代理接口，无法按账号随机分配 Zdaye 代理", ""
-
-    api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
-    result = fetch_zdaye_proxy_with_cache(
-        api_url=api_url,
-        api_key=api_key,
-        cooldown_seconds=settings.proxy_zdaye_cooldown_seconds,
-        max_candidates=0,
-        max_attempts=max_retries,
-    )
-    if result.proxy_url:
-        return result.proxy_url, None, result.message
-
-    last_error = result.message or result.error or "未知错误"
-    return None, last_error, result.message
+    return None, None, "代理服务已取消，注册任务直接使用默认网络"
 
 
 # ============== Pydantic Models ==============
@@ -254,37 +230,8 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 提前创建日志回调，确保代理获取阶段也会写入任务日志
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
-            # 为当前账号分配一个 Zdaye 代理
             actual_proxy_url = None
-            max_proxy_retries = 0
-
-            log_callback("[代理] 开始为当前账号分配 Zdaye 代理，将尝试当前缓存池中的可用候选")
-            actual_proxy_url, proxy_error, proxy_source = get_zdaye_proxy_for_registration(
-                max_retries=max_proxy_retries
-            )
-            if actual_proxy_url:
-                logger.info(f"任务 {task_uuid} 使用 Zdaye 代理: {actual_proxy_url[:50]}...")
-                if proxy_source:
-                    log_callback(f"[代理] {proxy_source}")
-                log_callback("[代理] Zdaye 代理分配成功")
-            else:
-                logger.warning(f"任务 {task_uuid} 获取 Zdaye 代理失败: {proxy_error}")
-                if proxy_source:
-                    log_callback(f"[代理] {proxy_source}")
-
-            if not actual_proxy_url:
-                error_message = proxy_error or "zdaye cooldown active and all cached candidates exhausted"
-                log_callback(f"[代理] Zdaye 候选池不可用，当前账号终止: {error_message}")
-                crud.update_registration_task(
-                    db,
-                    task_uuid,
-                    status="failed",
-                    completed_at=datetime.utcnow(),
-                    error_message=error_message,
-                )
-                task_manager.update_status(task_uuid, "failed", error=error_message)
-                logger.warning(f"注册任务失败: {task_uuid}, 原因: {error_message}")
-                return
+            log_callback("[代理] 代理服务已取消，当前账号直接使用默认网络")
 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
