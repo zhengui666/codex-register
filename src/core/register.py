@@ -109,6 +109,7 @@ class RegistrationEngine:
         self.proxy_url = proxy_url
         self.callback_logger = callback_logger or (lambda msg: logger.info(msg))
         self.task_uuid = task_uuid
+        self._log(f"最终使用的 proxy_url: {self.proxy_url or 'None'}")
 
         # 创建 HTTP 客户端
         self.http_client = OpenAIHTTPClient(proxy_url=proxy_url)
