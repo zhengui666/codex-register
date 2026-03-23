@@ -166,6 +166,8 @@ def fetch_zdaye_proxy_with_cache(
         _save_cached_pool(db, cache)
         if cache.cooldown_until > int(time.time()):
             exhausted_pool = attempted >= len(ordered_candidates)
+            if exhausted_pool:
+                _clear_cached_pool(db)
             return DynamicProxyFetchResult(
                 provider=ZDAYE_PROVIDER_NAME,
                 error="cooldown_exhausted" if exhausted_pool else "cooldown_retry_limit_reached",
@@ -354,6 +356,18 @@ def _save_cached_pool(db, cache: ZdayeCandidateCache) -> None:
         db,
         key=ZDAYE_CACHE_SETTING_KEY,
         value=json.dumps(cache.to_dict(), ensure_ascii=False),
+        description=ZDAYE_CACHE_DESCRIPTION,
+        category="proxy",
+    )
+
+
+def _clear_cached_pool(db) -> None:
+    from ..database import crud
+
+    crud.set_setting(
+        db,
+        key=ZDAYE_CACHE_SETTING_KEY,
+        value="",
         description=ZDAYE_CACHE_DESCRIPTION,
         category="proxy",
     )

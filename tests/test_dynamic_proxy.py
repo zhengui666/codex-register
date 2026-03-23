@@ -188,6 +188,8 @@ def test_fetch_zdaye_proxy_with_cache_reuses_cached_candidates(monkeypatch):
 
 
 def test_fetch_zdaye_proxy_with_cache_returns_cooldown_exhausted(monkeypatch):
+    store = {}
+
     class DummySetting:
         def __init__(self, value):
             self.value = value
@@ -215,13 +217,17 @@ def test_fetch_zdaye_proxy_with_cache_returns_cooldown_exhausted(monkeypatch):
             "http://2.2.2.2:8002": 102,
         },
     }
+    store["proxy.zdaye_candidate_cache"] = __import__("json").dumps(cached)
 
     monkeypatch.setattr("src.database.session.get_db", lambda: DummyContext())
     monkeypatch.setattr(
         "src.database.crud.get_setting",
-        lambda db, key: DummySetting(__import__("json").dumps(cached)),
+        lambda db, key: DummySetting(store[key]) if key in store else None,
     )
-    monkeypatch.setattr("src.database.crud.set_setting", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.database.crud.set_setting",
+        lambda db, key, value, description=None, category="general": store.__setitem__(key, value),
+    )
     monkeypatch.setattr("src.core.zdaye_proxy.fingerprinted_get", lambda *args, **kwargs: None)
 
     result = fetch_zdaye_proxy_with_cache(
@@ -233,6 +239,7 @@ def test_fetch_zdaye_proxy_with_cache_returns_cooldown_exhausted(monkeypatch):
     assert result.proxy_url is None
     assert result.error == "cooldown_exhausted"
     assert result.message == "zdaye cooldown active and all cached candidates exhausted"
+    assert store["proxy.zdaye_candidate_cache"] == ""
 
 
 def test_fetch_zdaye_proxy_with_cache_tries_beyond_three_candidates(monkeypatch):
