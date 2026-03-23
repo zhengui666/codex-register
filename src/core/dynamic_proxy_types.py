@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,28 @@ class ProxyCandidate:
             protocol = "http"
         return f"{protocol}://{self.ip}:{self.port}"
 
+    def cache_key(self) -> str:
+        return f"{(self.protocol or 'http').lower()}://{self.ip}:{self.port}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ip": self.ip,
+            "port": self.port,
+            "protocol": self.protocol,
+            "adr": self.adr,
+            "level": self.level,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProxyCandidate":
+        return cls(
+            ip=str(data.get("ip", "")).strip(),
+            port=int(data.get("port", 0)),
+            protocol=str(data.get("protocol", "http") or "http"),
+            adr=str(data.get("adr", "") or ""),
+            level=str(data.get("level", "") or ""),
+        )
+
 
 @dataclass
 class DynamicProxyFetchResult:
@@ -31,3 +53,4 @@ class DynamicProxyFetchResult:
     probe_ip: str = ""
     probe_response_time: Optional[int] = None
     probe_url: str = ""
+    candidates: list[ProxyCandidate] = field(default_factory=list)

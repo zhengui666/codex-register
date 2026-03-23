@@ -216,6 +216,18 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         category=SettingCategory.PROXY,
         description="从 JSON 响应中提取代理 URL 的字段路径（留空则使用响应原文）"
     ),
+    "proxy_zdaye_cooldown_seconds": SettingDefinition(
+        db_key="proxy.zdaye_cooldown_seconds",
+        default_value=600,
+        category=SettingCategory.PROXY,
+        description="Zdaye 候选池冷却时间（秒）"
+    ),
+    "proxy_zdaye_cache_max_candidates": SettingDefinition(
+        db_key="proxy.zdaye_cache_max_candidates",
+        default_value=20,
+        category=SettingCategory.PROXY,
+        description="Zdaye 候选池缓存的最大候选数"
+    ),
 
     # 注册配置
     "registration_max_retries": SettingDefinition(
@@ -395,6 +407,8 @@ SETTING_TYPES: Dict[str, Type] = {
     "proxy_enabled": bool,
     "proxy_port": int,
     "proxy_dynamic_enabled": bool,
+    "proxy_zdaye_cooldown_seconds": int,
+    "proxy_zdaye_cache_max_candidates": int,
     "registration_max_retries": int,
     "registration_timeout": int,
     "registration_default_password_length": int,
@@ -637,6 +651,8 @@ class Settings(BaseModel):
     proxy_dynamic_api_key: Optional[SecretStr] = None
     proxy_dynamic_api_key_header: str = "X-API-Key"
     proxy_dynamic_result_field: str = ""
+    proxy_zdaye_cooldown_seconds: int = 600
+    proxy_zdaye_cache_max_candidates: int = 20
 
     @property
     def proxy_url(self) -> Optional[str]:

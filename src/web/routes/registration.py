@@ -32,42 +32,38 @@ batch_tasks: Dict[str, dict] = {}
 # ============== Proxy Helper Functions ==============
 
 
-def get_zdaye_proxy_for_registration(max_retries: int = 3) -> Tuple[Optional[str], Optional[str]]:
+def get_zdaye_proxy_for_registration(max_retries: int = 3) -> Tuple[Optional[str], Optional[str], str]:
     """
     为单个注册任务获取 Zdaye 动态代理。
 
     Returns:
-        Tuple[proxy_url, error_message]
+        Tuple[proxy_url, error_message, source_message]
     """
-    from ...core.dynamic_proxy import fetch_dynamic_proxy_result
-    from ...core.zdaye_proxy import is_zdaye_free_proxy_api
+    from ...core.zdaye_proxy import fetch_zdaye_proxy_with_cache, is_zdaye_free_proxy_api
 
     settings = get_settings()
     api_url = (settings.proxy_dynamic_api_url or "").strip()
 
     if not settings.proxy_dynamic_enabled:
-        return None, "未启用动态代理，无法为注册任务分配 Zdaye 代理"
+        return None, "未启用动态代理，无法为注册任务分配 Zdaye 代理", ""
     if not api_url:
-        return None, "未配置动态代理 API 地址，无法为注册任务分配 Zdaye 代理"
+        return None, "未配置动态代理 API 地址，无法为注册任务分配 Zdaye 代理", ""
     if not is_zdaye_free_proxy_api(api_url):
-        return None, "当前动态代理 API 不是 Zdaye 免费代理接口，无法按账号随机分配 Zdaye 代理"
+        return None, "当前动态代理 API 不是 Zdaye 免费代理接口，无法按账号随机分配 Zdaye 代理", ""
 
     api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
+    result = fetch_zdaye_proxy_with_cache(
+        api_url=api_url,
+        api_key=api_key,
+        cooldown_seconds=settings.proxy_zdaye_cooldown_seconds,
+        max_candidates=settings.proxy_zdaye_cache_max_candidates,
+        max_attempts=max_retries,
+    )
+    if result.proxy_url:
+        return result.proxy_url, None, result.message
 
-    last_error = "未知错误"
-    for _ in range(max_retries):
-        result = fetch_dynamic_proxy_result(
-            api_url=api_url,
-            api_key=api_key,
-            api_key_header=settings.proxy_dynamic_api_key_header,
-            result_field=settings.proxy_dynamic_result_field,
-        )
-        if result.proxy_url:
-            return result.proxy_url, None
-
-        last_error = result.message or result.error or "未知错误"
-
-    return None, f"zdaye proxy unavailable after {max_retries} attempts: {last_error}"
+    last_error = result.message or result.error or "未知错误"
+    return None, last_error, result.message
 
 
 # ============== Pydantic Models ==============
@@ -258,25 +254,27 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 提前创建日志回调，确保代理获取阶段也会写入任务日志
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
-            # 为当前账号单独获取一个 Zdaye 代理
+            # 为当前账号分配一个 Zdaye 代理
             actual_proxy_url = None
             max_proxy_retries = 3
 
-            for attempt in range(1, max_proxy_retries + 1):
-                log_callback(f"[代理] 开始为当前账号获取 Zdaye 代理，第 {attempt}/{max_proxy_retries} 次")
-                actual_proxy_url, proxy_error = get_zdaye_proxy_for_registration(max_retries=1)
-                if actual_proxy_url:
-                    logger.info(f"任务 {task_uuid} 使用 Zdaye 代理: {actual_proxy_url[:50]}...")
-                    log_callback(f"[代理] Zdaye 代理获取成功，第 {attempt}/{max_proxy_retries} 次")
-                    break
-
-                logger.warning(f"任务 {task_uuid} 第 {attempt} 次获取 Zdaye 代理失败: {proxy_error}")
-                if attempt < max_proxy_retries:
-                    log_callback(f"[代理] 第 {attempt}/{max_proxy_retries} 次获取失败，准备重试: {proxy_error}")
+            log_callback(f"[代理] 开始为当前账号分配 Zdaye 代理，最多尝试 {max_proxy_retries} 个缓存候选")
+            actual_proxy_url, proxy_error, proxy_source = get_zdaye_proxy_for_registration(
+                max_retries=max_proxy_retries
+            )
+            if actual_proxy_url:
+                logger.info(f"任务 {task_uuid} 使用 Zdaye 代理: {actual_proxy_url[:50]}...")
+                if proxy_source:
+                    log_callback(f"[代理] {proxy_source}")
+                log_callback("[代理] Zdaye 代理分配成功")
+            else:
+                logger.warning(f"任务 {task_uuid} 获取 Zdaye 代理失败: {proxy_error}")
+                if proxy_source:
+                    log_callback(f"[代理] {proxy_source}")
 
             if not actual_proxy_url:
-                error_message = proxy_error or f"zdaye proxy unavailable after {max_proxy_retries} attempts"
-                log_callback(f"[代理] 连续 {max_proxy_retries} 次获取 Zdaye 代理失败，当前账号终止: {error_message}")
+                error_message = proxy_error or "zdaye cooldown active and cached candidate pool exhausted"
+                log_callback(f"[代理] Zdaye 候选池不可用，当前账号终止: {error_message}")
                 crud.update_registration_task(
                     db,
                     task_uuid,
