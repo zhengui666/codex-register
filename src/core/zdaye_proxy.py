@@ -76,7 +76,9 @@ def is_zdaye_free_proxy_api(api_url: str) -> bool:
         return False
 
     normalized_path = parsed.path.lower().rstrip("/")
-    return normalized_path.endswith("/freeproxy/get") or "freeproxy/get" in normalized_path
+    return (
+        normalized_path.endswith("/freeproxy/get") or "freeproxy/get" in normalized_path
+    )
 
 
 def fetch_zdaye_proxy(api_url: str, api_key: str = "") -> DynamicProxyFetchResult:
@@ -116,80 +118,63 @@ def fetch_zdaye_proxy_with_cache(
     from ..database.session import get_db
 
     with get_db() as db:
-        cache = _load_cached_pool(db)
         now = int(time.time())
-        cache_refreshed = False
+        cache = _load_cached_pool(db)
 
         if cache is None or cache.cooldown_until <= now:
-            candidates_result = _fetch_zdaye_candidates(
+            refreshed_cache, refresh_error = _refresh_verified_cache(
+                db=db,
                 api_url=api_url,
                 api_key=api_key,
+                cooldown_seconds=cooldown_seconds,
                 max_candidates=max_candidates,
             )
-            if candidates_result.error:
-                return candidates_result
+            if refresh_error is not None:
+                return refresh_error
+            cache = refreshed_cache
+            cache_source_message = "请求新的 Zdaye 候选池，筛选可用代理后分配"
+        else:
+            cache_source_message = "复用 Zdaye 已验证缓存代理并分配"
 
-            cache = ZdayeCandidateCache(
-                fetched_at=now,
-                cooldown_until=now + max(cooldown_seconds, 0),
-                candidates=list(candidates_result.candidates),
+        cached_result = _select_proxy_from_cache(
+            db=db,
+            cache=cache,
+            max_attempts=max_attempts,
+        )
+        if cached_result is not None:
+            cached_result.message = cache_source_message
+            return cached_result
+
+        _clear_cached_pool(db)
+        refreshed_cache, refresh_error = _refresh_verified_cache(
+            db=db,
+            api_url=api_url,
+            api_key=api_key,
+            cooldown_seconds=cooldown_seconds,
+            max_candidates=max_candidates,
+        )
+        if refresh_error is not None:
+            return refresh_error
+
+        refreshed_result = _select_proxy_from_cache(
+            db=db,
+            cache=refreshed_cache,
+            max_attempts=max_attempts,
+        )
+        if refreshed_result is not None:
+            refreshed_result.message = (
+                "当前缓存不可用，已重新获取并筛选 Zdaye 代理后分配"
             )
-            _save_cached_pool(db, cache)
-            cache_refreshed = True
+            return refreshed_result
 
-        ordered_candidates = _order_cached_candidates(cache)
-        attempted = 0
-
-        attempt_limit = max_attempts if max_attempts and max_attempts > 0 else len(ordered_candidates)
-
-        for candidate in ordered_candidates:
-            if attempted >= attempt_limit:
-                break
-            attempted += 1
-
-            probe = probe_proxy_connectivity(candidate.to_proxy_url())
-            candidate_key = candidate.cache_key()
-            if probe.verified:
-                cache.used_candidates[candidate_key] = int(time.time())
-                cache.failed_candidates.pop(candidate_key, None)
-                _save_cached_pool(db, cache)
-                probe.provider = ZDAYE_PROVIDER_NAME
-                probe.checked_candidates = attempted
-                probe.total_candidates = len(cache.candidates)
-                probe.candidates = list(cache.candidates)
-                if cache_refreshed:
-                    probe.message = "请求新的 Zdaye 候选池并分配代理"
-                else:
-                    probe.message = "复用 Zdaye 缓存候选池并分配代理"
-                return probe
-
-            cache.failed_candidates[candidate_key] = int(time.time())
-
-        _save_cached_pool(db, cache)
-        if cache.cooldown_until > int(time.time()):
-            exhausted_pool = attempted >= len(ordered_candidates)
-            if exhausted_pool:
-                _clear_cached_pool(db)
-            return DynamicProxyFetchResult(
-                provider=ZDAYE_PROVIDER_NAME,
-                error="cooldown_exhausted" if exhausted_pool else "cooldown_retry_limit_reached",
-                message=(
-                    "zdaye cooldown active and all cached candidates exhausted"
-                    if exhausted_pool
-                    else "zdaye cooldown active and max cached candidate attempts reached"
-                ),
-                checked_candidates=attempted,
-                total_candidates=len(cache.candidates),
-                candidates=list(cache.candidates),
-            )
-
+        _clear_cached_pool(db)
         return DynamicProxyFetchResult(
             provider=ZDAYE_PROVIDER_NAME,
             error="no_available_proxy",
-            message="站大爷候选池中没有可用代理",
-            checked_candidates=attempted,
-            total_candidates=len(cache.candidates),
-            candidates=list(cache.candidates),
+            message="站大爷代理池筛选后仍无可用代理",
+            checked_candidates=0,
+            total_candidates=len(refreshed_cache.candidates),
+            candidates=list(refreshed_cache.candidates),
         )
 
 
@@ -321,15 +306,102 @@ def _order_cached_candidates(cache: ZdayeCandidateCache) -> list[ProxyCandidate]
         return []
 
     unused = [
-        candidate for candidate in available if candidate.cache_key() not in cache.used_candidates
+        candidate
+        for candidate in available
+        if candidate.cache_key() not in cache.used_candidates
     ]
     reusable = [
-        candidate for candidate in available if candidate.cache_key() in cache.used_candidates
+        candidate
+        for candidate in available
+        if candidate.cache_key() in cache.used_candidates
     ]
 
     random.shuffle(unused)
-    reusable.sort(key=lambda candidate: cache.used_candidates.get(candidate.cache_key(), 0))
+    reusable.sort(
+        key=lambda candidate: cache.used_candidates.get(candidate.cache_key(), 0)
+    )
     return unused + reusable
+
+
+def _refresh_verified_cache(
+    db,
+    api_url: str,
+    api_key: str,
+    cooldown_seconds: int,
+    max_candidates: int,
+) -> tuple[ZdayeCandidateCache | None, DynamicProxyFetchResult | None]:
+    candidates_result = _fetch_zdaye_candidates(
+        api_url=api_url,
+        api_key=api_key,
+        max_candidates=max_candidates,
+    )
+    if candidates_result.error:
+        return None, candidates_result
+
+    verified_candidates: list[ProxyCandidate] = []
+    checked_candidates = 0
+    for candidate in list(candidates_result.candidates):
+        checked_candidates += 1
+        probe = probe_proxy_connectivity(candidate.to_proxy_url())
+        if probe.verified:
+            verified_candidates.append(candidate)
+
+    if not verified_candidates:
+        _clear_cached_pool(db)
+        return None, DynamicProxyFetchResult(
+            provider=ZDAYE_PROVIDER_NAME,
+            error="no_available_proxy",
+            message="站大爷代理池筛选后无可访问 chatgpt.com 的代理",
+            checked_candidates=checked_candidates,
+            total_candidates=len(candidates_result.candidates),
+            candidates=list(candidates_result.candidates),
+        )
+
+    now = int(time.time())
+    cache = ZdayeCandidateCache(
+        fetched_at=now,
+        cooldown_until=now + max(cooldown_seconds, 0),
+        candidates=verified_candidates,
+    )
+    _save_cached_pool(db, cache)
+    return cache, None
+
+
+def _select_proxy_from_cache(
+    db,
+    cache: ZdayeCandidateCache,
+    max_attempts: int,
+) -> DynamicProxyFetchResult | None:
+    ordered_candidates = _order_cached_candidates(cache)
+    if not ordered_candidates:
+        return None
+
+    attempted = 0
+    attempt_limit = (
+        max_attempts if max_attempts and max_attempts > 0 else len(ordered_candidates)
+    )
+
+    for candidate in ordered_candidates:
+        if attempted >= attempt_limit:
+            break
+        attempted += 1
+
+        probe = probe_proxy_connectivity(candidate.to_proxy_url())
+        candidate_key = candidate.cache_key()
+        if probe.verified:
+            cache.used_candidates[candidate_key] = int(time.time())
+            cache.failed_candidates.pop(candidate_key, None)
+            _save_cached_pool(db, cache)
+            probe.provider = ZDAYE_PROVIDER_NAME
+            probe.checked_candidates = attempted
+            probe.total_candidates = len(cache.candidates)
+            probe.candidates = list(cache.candidates)
+            return probe
+
+        cache.failed_candidates[candidate_key] = int(time.time())
+
+    _save_cached_pool(db, cache)
+    return None
 
 
 def _load_cached_pool(db) -> ZdayeCandidateCache | None:
@@ -387,7 +459,6 @@ def _build_request_url(api_url: str, api_key: str) -> str:
             "count": str(ZDAYE_CANDIDATE_COUNT),
             "return_type": "3",
             "dalu": query.get("dalu", "0"),
-            "adr": query.get("adr", "美国"),
             "protocol_type": query.get("protocol_type", "1"),
             "level_type": query.get("level_type", "1"),
             "lastcheck_type": query.get("lastcheck_type", "2"),

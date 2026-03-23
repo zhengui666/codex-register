@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from src.core import dynamic_proxy
 from src.core.dynamic_proxy_types import DynamicProxyFetchResult
-from src.core.zdaye_proxy import fetch_zdaye_proxy, fetch_zdaye_proxy_with_cache
+from src.core.zdaye_proxy import _build_request_url, fetch_zdaye_proxy, fetch_zdaye_proxy_with_cache
 from src.web.routes.settings import router as settings_router
 
 
@@ -158,9 +158,10 @@ def test_fetch_zdaye_proxy_with_cache_reuses_cached_candidates(monkeypatch):
 
     monkeypatch.setattr("src.core.zdaye_proxy.fingerprinted_get", fake_get)
     monkeypatch.setattr("src.core.zdaye_proxy.random.shuffle", lambda items: None)
+    probe_calls = []
     monkeypatch.setattr(
         "src.core.zdaye_proxy.probe_proxy_connectivity",
-        lambda proxy_url: DynamicProxyFetchResult(
+        lambda proxy_url: probe_calls.append(proxy_url) or DynamicProxyFetchResult(
             proxy_url=proxy_url,
             provider="zdaye_free_proxy",
             verified=True,
@@ -183,66 +184,17 @@ def test_fetch_zdaye_proxy_with_cache_reuses_cached_candidates(monkeypatch):
     assert first.verified is True
     assert second.verified is True
     assert calls["fetch"] == 1
-    assert first.message == "请求新的 Zdaye 候选池并分配代理"
-    assert second.message == "复用 Zdaye 缓存候选池并分配代理"
+    assert first.message == "请求新的 Zdaye 候选池，筛选可用代理后分配"
+    assert second.message == "复用 Zdaye 已验证缓存代理并分配"
+    assert probe_calls == [
+        "http://1.1.1.1:8001",
+        "http://2.2.2.2:8002",
+        "http://1.1.1.1:8001",
+        "http://2.2.2.2:8002",
+    ]
 
 
-def test_fetch_zdaye_proxy_with_cache_returns_cooldown_exhausted(monkeypatch):
-    store = {}
-
-    class DummySetting:
-        def __init__(self, value):
-            self.value = value
-
-    class DummyDB:
-        pass
-
-    class DummyContext:
-        def __enter__(self):
-            return DummyDB()
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    cached = {
-        "fetched_at": 100,
-        "cooldown_until": 9999999999,
-        "candidates": [
-            {"ip": "1.1.1.1", "port": 8001, "protocol": "http"},
-            {"ip": "2.2.2.2", "port": 8002, "protocol": "http"},
-        ],
-        "used_candidates": {},
-        "failed_candidates": {
-            "http://1.1.1.1:8001": 101,
-            "http://2.2.2.2:8002": 102,
-        },
-    }
-    store["proxy.zdaye_candidate_cache"] = __import__("json").dumps(cached)
-
-    monkeypatch.setattr("src.database.session.get_db", lambda: DummyContext())
-    monkeypatch.setattr(
-        "src.database.crud.get_setting",
-        lambda db, key: DummySetting(store[key]) if key in store else None,
-    )
-    monkeypatch.setattr(
-        "src.database.crud.set_setting",
-        lambda db, key, value, description=None, category="general": store.__setitem__(key, value),
-    )
-    monkeypatch.setattr("src.core.zdaye_proxy.fingerprinted_get", lambda *args, **kwargs: None)
-
-    result = fetch_zdaye_proxy_with_cache(
-        "http://www.zdopen.com/FreeProxy/Get/?app_id=demo",
-        cooldown_seconds=600,
-        max_attempts=3,
-    )
-
-    assert result.proxy_url is None
-    assert result.error == "cooldown_exhausted"
-    assert result.message == "zdaye cooldown active and all cached candidates exhausted"
-    assert store["proxy.zdaye_candidate_cache"] == ""
-
-
-def test_fetch_zdaye_proxy_with_cache_tries_beyond_three_candidates(monkeypatch):
+def test_fetch_zdaye_proxy_with_cache_overwrites_cache_with_verified_candidates(monkeypatch):
     store = {}
 
     class DummySetting:
@@ -277,11 +229,89 @@ def test_fetch_zdaye_proxy_with_cache_tries_beyond_three_candidates(monkeypatch)
                 {"ip": "1.1.1.1", "port": 8001, "protocol": "http"},
                 {"ip": "2.2.2.2", "port": 8002, "protocol": "http"},
                 {"ip": "3.3.3.3", "port": 8003, "protocol": "http"},
-                {"ip": "4.4.4.4", "port": 8004, "protocol": "http"},
             ],
         },
         text="",
     ))
+    monkeypatch.setattr("src.core.zdaye_proxy.random.shuffle", lambda items: None)
+
+    def fake_probe(proxy_url):
+        if proxy_url == "http://2.2.2.2:8002":
+            return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", verified=True)
+        return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", error="probe_failed", message="down")
+
+    monkeypatch.setattr("src.core.zdaye_proxy.probe_proxy_connectivity", fake_probe)
+
+    result = fetch_zdaye_proxy_with_cache(
+        "http://www.zdopen.com/FreeProxy/Get/?app_id=demo",
+        cooldown_seconds=600,
+    )
+
+    payload = __import__("json").loads(store["proxy.zdaye_candidate_cache"])
+
+    assert result.proxy_url == "http://2.2.2.2:8002"
+    assert result.message == "请求新的 Zdaye 候选池，筛选可用代理后分配"
+    assert [candidate["ip"] for candidate in payload["candidates"]] == ["2.2.2.2"]
+    assert payload["failed_candidates"] == {}
+    assert "http://2.2.2.2:8002" in payload["used_candidates"]
+
+
+def test_fetch_zdaye_proxy_with_cache_refreshes_when_cached_verified_pool_is_exhausted(monkeypatch):
+    store = {}
+
+    class DummySetting:
+        def __init__(self, value):
+            self.value = value
+
+    class DummyDB:
+        pass
+
+    class DummyContext:
+        def __enter__(self):
+            return DummyDB()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("src.database.session.get_db", lambda: DummyContext())
+    monkeypatch.setattr(
+        "src.database.crud.get_setting",
+        lambda db, key: DummySetting(store[key]) if key in store else None,
+    )
+    monkeypatch.setattr(
+        "src.database.crud.set_setting",
+        lambda db, key, value, description=None, category="general": store.__setitem__(key, value),
+    )
+    store["proxy.zdaye_candidate_cache"] = __import__("json").dumps(
+        {
+            "fetched_at": 100,
+            "cooldown_until": 9999999999,
+            "candidates": [
+                {"ip": "1.1.1.1", "port": 8001, "protocol": "http", "adr": "", "level": ""},
+                {"ip": "2.2.2.2", "port": 8002, "protocol": "http", "adr": "", "level": ""},
+            ],
+            "used_candidates": {},
+            "failed_candidates": {},
+        }
+    )
+    fetch_calls = {"count": 0}
+
+    def fake_get(*args, **kwargs):
+        fetch_calls["count"] += 1
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "code": "10001",
+                "msg": "ok",
+                "data": [
+                    {"ip": "3.3.3.3", "port": 8003, "protocol": "http"},
+                    {"ip": "4.4.4.4", "port": 8004, "protocol": "http"},
+                ],
+            },
+            text="",
+        )
+
+    monkeypatch.setattr("src.core.zdaye_proxy.fingerprinted_get", fake_get)
     monkeypatch.setattr("src.core.zdaye_proxy.random.shuffle", lambda items: None)
 
     seen = []
@@ -306,7 +336,10 @@ def test_fetch_zdaye_proxy_with_cache_tries_beyond_three_candidates(monkeypatch)
         "http://2.2.2.2:8002",
         "http://3.3.3.3:8003",
         "http://4.4.4.4:8004",
+        "http://4.4.4.4:8004",
     ]
+    assert fetch_calls["count"] == 1
+    assert result.message == "当前缓存不可用，已重新获取并筛选 Zdaye 代理后分配"
 
 
 def test_fetch_zdaye_proxy_handles_invalid_payload(monkeypatch):
@@ -317,6 +350,12 @@ def test_fetch_zdaye_proxy_handles_invalid_payload(monkeypatch):
 
     assert result.proxy_url is None
     assert result.error == "invalid_structure"
+
+
+def test_build_request_url_does_not_force_default_adr():
+    built = _build_request_url("http://www.zdopen.com/FreeProxy/Get/?app_id=demo", "")
+
+    assert "adr=" not in built
 
 
 def test_settings_dynamic_proxy_test_uses_verified_provider_result(monkeypatch):
