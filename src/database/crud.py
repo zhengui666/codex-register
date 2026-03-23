@@ -36,6 +36,7 @@ def create_account(
     access_token: Optional[str] = None,
     refresh_token: Optional[str] = None,
     id_token: Optional[str] = None,
+    cookies: Optional[str] = None,
     proxy_used: Optional[str] = None,
     expires_at: Optional['datetime'] = None,
     extra_data: Optional[Dict[str, Any]] = None,
@@ -62,6 +63,7 @@ def create_account(
         access_token=access_token,
         refresh_token=refresh_token,
         id_token=id_token,
+        cookies=cookies,
         proxy_used=proxy_used,
         expires_at=expires_at,
         extra_data=extra_data or {},
@@ -134,7 +136,6 @@ def update_account(
         }
         kwargs.setdefault("token_sync_status", _default_token_sync_status(persisted_token_values))
         kwargs["token_sync_updated_at"] = datetime.utcnow()
-
     for key, value in kwargs.items():
         if hasattr(db_account, key) and value is not None:
             setattr(db_account, key, value)
@@ -353,6 +354,34 @@ def delete_registration_task(db: Session, task_uuid: str) -> bool:
     return True
 
 
+def fail_incomplete_registration_tasks(db: Session, error_message: str) -> List[str]:
+    """将服务重启后遗留的未完成任务标记为失败"""
+    tasks = db.query(RegistrationTask).filter(
+        RegistrationTask.status.in_(("pending", "running"))
+    ).all()
+
+    if not tasks:
+        return []
+
+    now = datetime.utcnow()
+    cleaned_task_ids: List[str] = []
+    cleanup_log = f"[系统] {error_message}"
+
+    for task in tasks:
+        task.status = "failed"
+        task.error_message = error_message
+        task.completed_at = now
+        if task.logs:
+            if cleanup_log not in task.logs:
+                task.logs = f"{task.logs}\n{cleanup_log}"
+        else:
+            task.logs = cleanup_log
+        cleaned_task_ids.append(task.task_uuid)
+
+    db.commit()
+    return cleaned_task_ids
+
+
 # 为 API 路由添加别名
 get_account = get_account_by_id
 get_registration_task = get_registration_task_by_uuid
@@ -501,13 +530,6 @@ def delete_proxy(db: Session, proxy_id: int) -> bool:
     db.delete(db_proxy)
     db.commit()
     return True
-
-
-def delete_disabled_proxies(db: Session) -> int:
-    """删除所有已禁用代理"""
-    deleted = db.query(Proxy).filter(Proxy.enabled == False).delete(synchronize_session=False)
-    db.commit()
-    return deleted
 
 
 def update_proxy_last_used(db: Session, proxy_id: int) -> bool:

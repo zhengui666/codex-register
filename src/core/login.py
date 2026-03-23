@@ -81,7 +81,10 @@ class LoginEngine(RegistrationEngine):
             }
 
             if sen_token:
-                sentinel = f'{{"p": "", "t": "", "c": "{sen_token}", "id": "{did}", "flow": "authorize_continue"}}'
+                sentinel = (
+                    f'{{"p": "", "t": "", "c": "{sen_token}", '
+                    f'"id": "{did}", "flow": "authorize_continue"}}'
+                )
                 headers["openai-sentinel-token"] = sentinel
 
             response = self.session.post(
@@ -101,7 +104,6 @@ class LoginEngine(RegistrationEngine):
     def _send_verification_code_passwordless(self) -> bool:
         """发送验证码"""
         try:
-            # 记录发送时间戳
             self._otp_sent_at = time.time()
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["passwordless_send_otp"],
@@ -281,7 +283,6 @@ class LoginEngine(RegistrationEngine):
             self._log("开始注册流程")
             self._log("=" * 60)
 
-            # 1. 检查 IP 地理位置
             self._log("1. 检查 IP 地理位置...")
             ip_ok, location = self._check_ip_location()
             if not ip_ok:
@@ -291,7 +292,6 @@ class LoginEngine(RegistrationEngine):
 
             self._log(f"IP 位置: {location}")
 
-            # 2. 创建邮箱
             self._log("2. 创建邮箱...")
             if not self._create_email():
                 result.error_message = "创建邮箱失败"
@@ -299,26 +299,22 @@ class LoginEngine(RegistrationEngine):
 
             result.email = self.email
 
-            # 3. 初始化会话
             self._log("3. 初始化会话...")
             if not self._init_session():
                 result.error_message = "初始化会话失败"
                 return result
 
-            # 4. 开始 OAuth 流程
             self._log("4. 开始 OAuth 授权流程...")
             if not self._start_oauth():
                 result.error_message = "开始 OAuth 流程失败"
                 return result
 
-            # 5. 获取 Device ID
             self._log("5. 获取 Device ID...")
             did = self._get_device_id()
             if not did:
                 result.error_message = "获取 Device ID 失败"
                 return result
 
-            # 6. 检查 Sentinel 拦截
             self._log("6. 检查 Sentinel 拦截...")
             sen_token = self._check_sentinel(did)
             if sen_token:
@@ -326,32 +322,28 @@ class LoginEngine(RegistrationEngine):
             else:
                 self._log("Sentinel 检查失败或未启用", "warning")
 
-            # 7. 提交注册表单 + 解析响应判断账号状态
             self._log("7. 提交注册表单...")
             signup_result = self._submit_signup_form(did, sen_token)
             if not signup_result.success:
                 result.error_message = f"提交注册表单失败: {signup_result.error_message}"
                 return result
 
-            # 8. 检测到已注册账号 → 直接终止任务
             if self._is_existing_account:
                 self._log(f"8. 邮箱 {self.email} 在 OpenAI 已注册，跳过注册流程", "warning")
                 result.error_message = f"邮箱 {self.email} 已在 OpenAI 注册"
                 return result
-            else:
-                self._log("8. 注册密码...")
-                password_ok, password = self._register_password()
-                if not password_ok:
-                    result.error_message = "注册密码失败"
-                    return result
 
-            # 9. 发送验证码
+            self._log("8. 注册密码...")
+            password_ok, password = self._register_password()
+            if not password_ok:
+                result.error_message = "注册密码失败"
+                return result
+
             self._log("9. 发送验证码...")
             if not self._send_verification_code():
                 result.error_message = "发送验证码失败"
                 return result
 
-            # 10. 获取验证码（超时后重发一次）
             self._log("10. 等待验证码...")
             code = self._get_verification_code()
             if not code:
@@ -362,13 +354,11 @@ class LoginEngine(RegistrationEngine):
                 result.error_message = "获取验证码失败"
                 return result
 
-            # 11. 验证验证码
             self._log("11. 验证验证码...")
             if not self._validate_verification_code(code):
                 result.error_message = "验证验证码失败"
                 return result
 
-            # 12. 创建用户账户
             self._log("12. 创建用户账户...")
             if not self._create_user_account():
                 result.error_message = "创建用户账户失败"
@@ -404,7 +394,6 @@ class LoginEngine(RegistrationEngine):
                 result.error_message = "验证验证码失败"
                 return result
 
-            # 13. 获取 Workspace ID
             self._log("17. 获取 Workspace ID...")
             workspace_id = self._get_workspace_id()
             if not workspace_id:
@@ -413,45 +402,37 @@ class LoginEngine(RegistrationEngine):
 
             result.workspace_id = workspace_id
 
-            # 14. 选择 Workspace
             self._log("18. 选择 Workspace...")
             continue_url = self._select_workspace(workspace_id)
             if not continue_url:
                 result.error_message = "选择 Workspace 失败"
                 return result
 
-            # 15. 跟随重定向链
             self._log("19. 跟随重定向链...")
             callback_url = self._follow_redirects(continue_url)
             if not callback_url:
                 result.error_message = "跟随重定向链失败"
                 return result
 
-            # 16. 处理 OAuth 回调
             self._log("20. 处理 OAuth 回调...")
             token_info = self._handle_oauth_callback(callback_url)
             if not token_info:
                 result.error_message = "处理 OAuth 回调失败"
                 return result
 
-            # 提取账户信息
             result.account_id = token_info.get("account_id", "")
             result.access_token = token_info.get("access_token", "")
             result.refresh_token = token_info.get("refresh_token", "")
             result.id_token = token_info.get("id_token", "")
-            result.password = self.password or ""  # 保存密码（已注册账号为空）
-
-            # 设置来源标记
+            result.password = self.password or ""
             result.source = "register"
 
-            # 尝试获取 session_token 从 cookie
             session_cookie = self.session.cookies.get("__Secure-next-auth.session-token")
             if session_cookie:
                 self.session_token = session_cookie
                 result.session_token = session_cookie
-                self._log(f"获取到 Session Token")
+                self._log("获取到 Session Token")
 
-            # 17. 完成
             self._log("=" * 60)
             self._log("注册成功!")
             self._log(f"邮箱: {result.email}")

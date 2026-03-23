@@ -42,7 +42,13 @@ def test_run_sync_registration_task_disables_bad_proxy_and_retries(monkeypatch, 
     monkeypatch.setattr(
         registration,
         "EmailServiceFactory",
-        SimpleNamespace(create=lambda service_type, config: SimpleNamespace(service_type=service_type, config=config)),
+        SimpleNamespace(
+            create=lambda service_type, config, name=None: SimpleNamespace(
+                service_type=service_type,
+                config=config,
+                name=name or service_type.value,
+            )
+        ),
     )
 
     attempted_proxies = []
@@ -73,6 +79,7 @@ def test_run_sync_registration_task_disables_bad_proxy_and_retries(monkeypatch, 
             return True
 
     monkeypatch.setattr(registration, "RegistrationEngine", FakeRegistrationEngine)
+    registration.email_service_circuit_breakers.clear()
 
     registration._run_sync_registration_task(
         task_uuid="task-proxy-failover",
