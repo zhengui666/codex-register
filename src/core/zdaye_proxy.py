@@ -5,6 +5,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -111,7 +112,7 @@ def fetch_zdaye_proxy_with_cache(
     api_url: str,
     api_key: str = "",
     cooldown_seconds: int = 600,
-    max_candidates: int = ZDAYE_CANDIDATE_COUNT,
+    max_candidates: int = 0,
     max_attempts: int = 0,
 ) -> DynamicProxyFetchResult:
     from ..database import crud
@@ -226,7 +227,7 @@ def probe_proxy_connectivity(proxy_url: str) -> DynamicProxyFetchResult:
 def _fetch_zdaye_candidates(
     api_url: str,
     api_key: str = "",
-    max_candidates: int = ZDAYE_CANDIDATE_COUNT,
+    max_candidates: int = 0,
 ) -> DynamicProxyFetchResult:
     request_url = _build_request_url(api_url, api_key)
 
@@ -286,10 +287,13 @@ def _fetch_zdaye_candidates(
             message="站大爷代理 API 未返回可用候选代理",
         )
 
+    if max_candidates and max_candidates > 0:
+        candidates = candidates[:max_candidates]
+
     return DynamicProxyFetchResult(
         provider=ZDAYE_PROVIDER_NAME,
-        total_candidates=len(candidates[:max_candidates]),
-        candidates=list(candidates[:max_candidates]),
+        total_candidates=len(candidates),
+        candidates=list(candidates),
     )
 
 
@@ -340,11 +344,22 @@ def _refresh_verified_cache(
 
     verified_candidates: list[ProxyCandidate] = []
     checked_candidates = 0
-    for candidate in list(candidates_result.candidates):
-        checked_candidates += 1
-        probe = probe_proxy_connectivity(candidate.to_proxy_url())
-        if probe.verified:
-            verified_candidates.append(candidate)
+    max_workers = min(8, max(1, len(candidates_result.candidates)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(probe_proxy_connectivity, candidate.to_proxy_url()): candidate
+            for candidate in list(candidates_result.candidates)
+        }
+        for future in as_completed(future_map):
+            checked_candidates += 1
+            candidate = future_map[future]
+            try:
+                probe = future.result()
+            except Exception as exc:
+                logger.debug("站大爷候选探测异常 %s: %s", candidate.to_proxy_url(), exc)
+                continue
+            if probe.verified:
+                verified_candidates.append(candidate)
 
     if not verified_candidates:
         _clear_cached_pool(db)

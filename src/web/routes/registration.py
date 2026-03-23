@@ -56,7 +56,7 @@ def get_zdaye_proxy_for_registration(max_retries: int = 0) -> Tuple[Optional[str
         api_url=api_url,
         api_key=api_key,
         cooldown_seconds=settings.proxy_zdaye_cooldown_seconds,
-        max_candidates=settings.proxy_zdaye_cache_max_candidates,
+        max_candidates=0,
         max_attempts=max_retries,
     )
     if result.proxy_url:

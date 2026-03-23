@@ -358,6 +358,77 @@ def test_build_request_url_does_not_force_default_adr():
     assert "adr=" not in built
 
 
+def test_fetch_zdaye_proxy_with_cache_uses_all_candidates_when_unbounded(monkeypatch):
+    store = {}
+
+    class DummySetting:
+        def __init__(self, value):
+            self.value = value
+
+    class DummyDB:
+        pass
+
+    class DummyContext:
+        def __enter__(self):
+            return DummyDB()
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("src.database.session.get_db", lambda: DummyContext())
+    monkeypatch.setattr(
+        "src.database.crud.get_setting",
+        lambda db, key: DummySetting(store[key]) if key in store else None,
+    )
+    monkeypatch.setattr(
+        "src.database.crud.set_setting",
+        lambda db, key, value, description=None, category="general": store.__setitem__(key, value),
+    )
+
+    monkeypatch.setattr(
+        "src.core.zdaye_proxy.fingerprinted_get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "code": "10001",
+                "msg": "ok",
+                "data": [
+                    {"ip": str(i), "port": 8000 + i, "protocol": "http"}
+                    for i in range(1, 6)
+                ],
+            },
+            text="",
+        ),
+    )
+    monkeypatch.setattr("src.core.zdaye_proxy.random.shuffle", lambda items: None)
+
+    seen = []
+
+    def fake_probe(proxy_url):
+        seen.append(proxy_url)
+        if proxy_url.endswith(":8005"):
+            return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", verified=True)
+        return DynamicProxyFetchResult(proxy_url=proxy_url, provider="zdaye_free_proxy", error="probe_failed", message="down")
+
+    monkeypatch.setattr("src.core.zdaye_proxy.probe_proxy_connectivity", fake_probe)
+
+    result = fetch_zdaye_proxy_with_cache(
+        "http://www.zdopen.com/FreeProxy/Get/?app_id=demo",
+        cooldown_seconds=600,
+        max_candidates=0,
+    )
+
+    assert result.proxy_url == "http://5:8005"
+    assert set(seen) == {
+        "http://1:8001",
+        "http://2:8002",
+        "http://3:8003",
+        "http://4:8004",
+        "http://5:8005",
+    }
+    assert len(seen) == 6
+
+
 def test_settings_dynamic_proxy_test_uses_verified_provider_result(monkeypatch):
     app = FastAPI()
     app.include_router(settings_router, prefix="/api/settings")
