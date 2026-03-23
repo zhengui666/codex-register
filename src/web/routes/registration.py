@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from ...database import crud
 from ...database.session import get_db
-from ...database.models import RegistrationTask, Proxy
+from ...database.models import RegistrationTask
 from ...core.register import RegistrationEngine, RegistrationResult
 from ...services import EmailServiceFactory, EmailServiceType
 from ...config.settings import get_settings
@@ -31,36 +31,43 @@ batch_tasks: Dict[str, dict] = {}
 
 # ============== Proxy Helper Functions ==============
 
-def get_proxy_for_registration(db) -> Tuple[Optional[str], Optional[int]]:
-    """
-    获取用于注册的代理
 
-    策略：
-    1. 优先从代理列表中随机选择一个启用的代理
-    2. 如果代理列表为空且启用了动态代理，调用动态代理 API 获取
-    3. 否则使用系统设置中的静态默认代理
+def get_zdaye_proxy_for_registration(max_retries: int = 3) -> Tuple[Optional[str], Optional[str]]:
+    """
+    为单个注册任务获取 Zdaye 动态代理。
 
     Returns:
-        Tuple[proxy_url, proxy_id]: 代理 URL 和代理 ID（如果来自代理列表）
+        Tuple[proxy_url, error_message]
     """
-    # 先尝试从代理列表中获取
-    proxy = crud.get_random_proxy(db)
-    if proxy:
-        return proxy.proxy_url, proxy.id
+    from ...core.dynamic_proxy import fetch_dynamic_proxy_result
+    from ...core.zdaye_proxy import is_zdaye_free_proxy_api
 
-    # 代理列表为空，尝试动态代理或静态代理
-    from ...core.dynamic_proxy import get_proxy_url_for_task
-    proxy_url = get_proxy_url_for_task()
-    if proxy_url:
-        return proxy_url, None
+    settings = get_settings()
+    api_url = (settings.proxy_dynamic_api_url or "").strip()
 
-    return None, None
+    if not settings.proxy_dynamic_enabled:
+        return None, "未启用动态代理，无法为注册任务分配 Zdaye 代理"
+    if not api_url:
+        return None, "未配置动态代理 API 地址，无法为注册任务分配 Zdaye 代理"
+    if not is_zdaye_free_proxy_api(api_url):
+        return None, "当前动态代理 API 不是 Zdaye 免费代理接口，无法按账号随机分配 Zdaye 代理"
 
+    api_key = settings.proxy_dynamic_api_key.get_secret_value() if settings.proxy_dynamic_api_key else ""
 
-def update_proxy_usage(db, proxy_id: Optional[int]):
-    """更新代理的使用时间"""
-    if proxy_id:
-        crud.update_proxy_last_used(db, proxy_id)
+    last_error = "未知错误"
+    for _ in range(max_retries):
+        result = fetch_dynamic_proxy_result(
+            api_url=api_url,
+            api_key=api_key,
+            api_key_header=settings.proxy_dynamic_api_key_header,
+            result_field=settings.proxy_dynamic_result_field,
+        )
+        if result.proxy_url:
+            return result.proxy_url, None
+
+        last_error = result.message or result.error or "未知错误"
+
+    return None, f"zdaye proxy unavailable after {max_retries} attempts: {last_error}"
 
 
 # ============== Pydantic Models ==============
@@ -248,16 +255,38 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 更新 TaskManager 状态
             task_manager.update_status(task_uuid, "running")
 
-            # 确定使用的代理
-            # 如果前端传入了代理参数，使用传入的
-            # 否则从代理列表或系统设置中获取
-            actual_proxy_url = proxy
-            proxy_id = None
+            # 提前创建日志回调，确保代理获取阶段也会写入任务日志
+            log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
+
+            # 为当前账号单独获取一个 Zdaye 代理
+            actual_proxy_url = None
+            max_proxy_retries = 3
+
+            for attempt in range(1, max_proxy_retries + 1):
+                log_callback(f"[代理] 开始为当前账号获取 Zdaye 代理，第 {attempt}/{max_proxy_retries} 次")
+                actual_proxy_url, proxy_error = get_zdaye_proxy_for_registration(max_retries=1)
+                if actual_proxy_url:
+                    logger.info(f"任务 {task_uuid} 使用 Zdaye 代理: {actual_proxy_url[:50]}...")
+                    log_callback(f"[代理] Zdaye 代理获取成功，第 {attempt}/{max_proxy_retries} 次")
+                    break
+
+                logger.warning(f"任务 {task_uuid} 第 {attempt} 次获取 Zdaye 代理失败: {proxy_error}")
+                if attempt < max_proxy_retries:
+                    log_callback(f"[代理] 第 {attempt}/{max_proxy_retries} 次获取失败，准备重试: {proxy_error}")
 
             if not actual_proxy_url:
-                actual_proxy_url, proxy_id = get_proxy_for_registration(db)
-                if actual_proxy_url:
-                    logger.info(f"任务 {task_uuid} 使用代理: {actual_proxy_url[:50]}...")
+                error_message = proxy_error or f"zdaye proxy unavailable after {max_proxy_retries} attempts"
+                log_callback(f"[代理] 连续 {max_proxy_retries} 次获取 Zdaye 代理失败，当前账号终止: {error_message}")
+                crud.update_registration_task(
+                    db,
+                    task_uuid,
+                    status="failed",
+                    completed_at=datetime.utcnow(),
+                    error_message=error_message,
+                )
+                task_manager.update_status(task_uuid, "failed", error=error_message)
+                logger.warning(f"注册任务失败: {task_uuid}, 原因: {error_message}")
+                return
 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
@@ -391,9 +420,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
             email_service = EmailServiceFactory.create(service_type, config)
 
-            # 创建注册引擎 - 使用 TaskManager 的日志回调
-            log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
-
             engine = RegistrationEngine(
                 email_service=email_service,
                 proxy_url=actual_proxy_url,
@@ -405,9 +431,6 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             result = engine.run()
 
             if result.success:
-                # 更新代理使用时间
-                update_proxy_usage(db, proxy_id)
-
                 # 保存到数据库
                 engine.save_to_database(result)
 

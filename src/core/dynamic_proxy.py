@@ -3,28 +3,59 @@
 支持通过外部 API 获取动态代理 URL
 """
 
+from __future__ import annotations
+
+import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
-from .fingerprint import build_request_context
+from .dynamic_proxy_types import DynamicProxyFetchResult
+from .zdaye_proxy import fetch_zdaye_proxy, is_zdaye_free_proxy_api
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "X-API-Key", result_field: str = "") -> Optional[str]:
+def fetch_dynamic_proxy_result(
+    api_url: str,
+    api_key: str = "",
+    api_key_header: str = "X-API-Key",
+    result_field: str = "",
+) -> DynamicProxyFetchResult:
     """
-    从代理 API 获取代理 URL
-
-    Args:
-        api_url: 代理 API 地址，响应应为代理 URL 字符串或含代理 URL 的 JSON
-        api_key: API 密钥（可选）
-        api_key_header: API 密钥请求头名称
-        result_field: 从 JSON 响应中提取代理 URL 的字段路径，支持点号分隔（如 "data.proxy"），留空则使用响应原文
-
-    Returns:
-        代理 URL 字符串（如 http://user:pass@host:port），失败返回 None
+    从代理 API 获取代理 URL 及调试信息。
     """
+    if is_zdaye_free_proxy_api(api_url):
+        return fetch_zdaye_proxy(api_url=api_url, api_key=api_key)
+
+    return _fetch_generic_dynamic_proxy(
+        api_url=api_url,
+        api_key=api_key,
+        api_key_header=api_key_header,
+        result_field=result_field,
+    )
+
+
+def fetch_dynamic_proxy(
+    api_url: str,
+    api_key: str = "",
+    api_key_header: str = "X-API-Key",
+    result_field: str = "",
+) -> Optional[str]:
+    return fetch_dynamic_proxy_result(
+        api_url=api_url,
+        api_key=api_key,
+        api_key_header=api_key_header,
+        result_field=result_field,
+    ).proxy_url
+
+
+def _fetch_generic_dynamic_proxy(
+    api_url: str,
+    api_key: str = "",
+    api_key_header: str = "X-API-Key",
+    result_field: str = "",
+) -> DynamicProxyFetchResult:
     try:
         from .fingerprint import fingerprinted_get
 
@@ -39,56 +70,83 @@ def fetch_dynamic_proxy(api_url: str, api_key: str = "", api_key_header: str = "
         )
 
         if response.status_code != 200:
-            logger.warning(f"动态代理 API 返回错误状态码: {response.status_code}")
-            return None
+            logger.warning("动态代理 API 返回错误状态码: %s", response.status_code)
+            return DynamicProxyFetchResult(
+                provider="generic",
+                error="bad_status",
+                message=f"动态代理 API 返回 HTTP {response.status_code}",
+            )
 
-        text = response.text.strip()
-
-        # 尝试解析 JSON
-        if result_field or text.startswith("{") or text.startswith("["):
-            try:
-                import json
-                data = json.loads(text)
-                if result_field:
-                    # 按点号路径逐层提取
-                    for key in result_field.split("."):
-                        if isinstance(data, dict):
-                            data = data.get(key)
-                        elif isinstance(data, list) and key.isdigit():
-                            data = data[int(key)]
-                        else:
-                            data = None
-                        if data is None:
-                            break
-                    proxy_url = str(data).strip() if data is not None else None
-                else:
-                    # 无指定字段，尝试常见键名
-                    for key in ("proxy", "url", "proxy_url", "data", "ip"):
-                        val = data.get(key) if isinstance(data, dict) else None
-                        if val:
-                            proxy_url = str(val).strip()
-                            break
-                    else:
-                        proxy_url = text
-            except (ValueError, AttributeError):
-                proxy_url = text
-        else:
-            proxy_url = text
-
+        proxy_url = _extract_proxy_url(response.text.strip(), result_field)
         if not proxy_url:
             logger.warning("动态代理 API 返回空代理 URL")
-            return None
+            return DynamicProxyFetchResult(
+                provider="generic",
+                error="empty_response",
+                message="动态代理 API 返回为空或未提取到代理地址",
+            )
 
-        # 若未包含协议头，默认加 http://
-        if not re.match(r'^(http|socks5)://', proxy_url):
-            proxy_url = "http://" + proxy_url
+        proxy_url = _normalize_proxy_url(proxy_url)
+        logger.info(
+            "动态代理获取成功: %s",
+            f"{proxy_url[:40]}..." if len(proxy_url) > 40 else proxy_url,
+        )
+        return DynamicProxyFetchResult(
+            proxy_url=proxy_url,
+            provider="generic",
+            message="动态代理地址获取成功",
+        )
 
-        logger.info(f"动态代理获取成功: {proxy_url[:40]}..." if len(proxy_url) > 40 else f"动态代理获取成功: {proxy_url}")
-        return proxy_url
+    except Exception as exc:
+        logger.error("获取动态代理失败: %s", exc)
+        return DynamicProxyFetchResult(
+            provider="generic",
+            error="request_failed",
+            message=f"获取动态代理失败: {exc}",
+        )
 
-    except Exception as e:
-        logger.error(f"获取动态代理失败: {e}")
+
+def _extract_proxy_url(text: str, result_field: str) -> Optional[str]:
+    if not text:
         return None
+
+    if result_field or text.startswith("{") or text.startswith("["):
+        try:
+            data = json.loads(text)
+            if result_field:
+                data = _extract_json_path(data, result_field)
+                return str(data).strip() if data is not None else None
+
+            if isinstance(data, dict):
+                for key in ("proxy", "url", "proxy_url", "data", "ip"):
+                    value = data.get(key)
+                    if value:
+                        return str(value).strip()
+            return text
+        except (ValueError, AttributeError, IndexError, TypeError):
+            return text
+
+    return text
+
+
+def _extract_json_path(data: Any, result_field: str) -> Any:
+    current = data
+    for key in result_field.split("."):
+        if isinstance(current, dict):
+            current = current.get(key)
+        elif isinstance(current, list) and key.isdigit():
+            current = current[int(key)]
+        else:
+            return None
+        if current is None:
+            return None
+    return current
+
+
+def _normalize_proxy_url(proxy_url: str) -> str:
+    if not re.match(r"^(http|https|socks4|socks5)://", proxy_url):
+        return "http://" + proxy_url
+    return proxy_url
 
 
 def get_proxy_url_for_task() -> Optional[str]:

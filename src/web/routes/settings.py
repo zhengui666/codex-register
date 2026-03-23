@@ -4,7 +4,10 @@
 
 import logging
 import os
+import re
+import time
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -153,7 +156,8 @@ async def update_dynamic_proxy_settings(request: DynamicProxySettings):
 @router.post("/proxy/dynamic/test")
 async def test_dynamic_proxy(request: DynamicProxySettings):
     """测试动态代理 API"""
-    from ...core.dynamic_proxy import fetch_dynamic_proxy
+    from ...core.dynamic_proxy import fetch_dynamic_proxy_result
+    from ...core.fingerprint import fingerprinted_get
 
     if not request.api_url:
         raise HTTPException(status_code=400, detail="请填写动态代理 API 地址")
@@ -165,21 +169,39 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         if settings.proxy_dynamic_api_key:
             api_key = settings.proxy_dynamic_api_key.get_secret_value()
 
-    proxy_url = fetch_dynamic_proxy(
+    result = fetch_dynamic_proxy_result(
         api_url=request.api_url,
         api_key=api_key,
         api_key_header=request.api_key_header,
         result_field=request.result_field,
     )
 
-    if not proxy_url:
-        return {"success": False, "message": "动态代理 API 返回为空或请求失败"}
+    if not result.proxy_url:
+        return {
+            "success": False,
+            "provider": result.provider,
+            "error": result.error or "unknown_error",
+            "checked_candidates": result.checked_candidates,
+            "total_candidates": result.total_candidates,
+            "message": result.message or "动态代理 API 返回为空或请求失败",
+        }
 
-    # 用获取到的代理测试连通性
-    import time
-    from src.core.fingerprint import fingerprinted_get
+    masked_proxy_url = _mask_proxy_url(result.proxy_url)
+    if result.verified:
+        return {
+            "success": True,
+            "provider": result.provider,
+            "proxy_url": masked_proxy_url,
+            "ip": result.probe_ip,
+            "response_time": result.probe_response_time,
+            "checked_candidates": result.checked_candidates,
+            "total_candidates": result.total_candidates,
+            "message": result.message,
+        }
+
+    # 通用 provider 没有内置可用性探测时，继续沿用旧逻辑
     try:
-        proxies = {"http": proxy_url, "https": proxy_url}
+        proxies = {"http": result.proxy_url, "https": result.proxy_url}
         start = time.time()
         resp = fingerprinted_get(
             "https://api.ipify.org?format=json",
@@ -190,11 +212,54 @@ async def test_dynamic_proxy(request: DynamicProxySettings):
         elapsed = round((time.time() - start) * 1000)
         if resp.status_code == 200:
             ip = resp.json().get("ip", "")
-            return {"success": True, "proxy_url": proxy_url, "ip": ip, "response_time": elapsed,
-                    "message": f"动态代理可用，出口 IP: {ip}，响应时间: {elapsed}ms"}
-        return {"success": False, "proxy_url": proxy_url, "message": f"代理连接失败: HTTP {resp.status_code}"}
+            return {
+                "success": True,
+                "provider": result.provider,
+                "proxy_url": masked_proxy_url,
+                "ip": ip,
+                "response_time": elapsed,
+                "checked_candidates": result.checked_candidates,
+                "total_candidates": result.total_candidates,
+                "message": f"动态代理可用，出口 IP: {ip}，响应时间: {elapsed}ms",
+            }
+        return {
+            "success": False,
+            "provider": result.provider,
+            "proxy_url": masked_proxy_url,
+            "error": "probe_bad_status",
+            "message": f"代理连接失败: HTTP {resp.status_code}",
+        }
     except Exception as e:
-        return {"success": False, "proxy_url": proxy_url, "message": f"代理连接失败: {e}"}
+        return {
+            "success": False,
+            "provider": result.provider,
+            "proxy_url": masked_proxy_url,
+            "error": "probe_failed",
+            "message": f"代理连接失败: {e}",
+        }
+
+
+def _mask_proxy_url(proxy_url: str) -> str:
+    parts = urlsplit(proxy_url)
+    hostname = parts.hostname or ""
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", hostname):
+        octets = hostname.split(".")
+        hostname = ".".join(octets[:3] + ["*"])
+    elif hostname:
+        labels = hostname.split(".")
+        labels[0] = labels[0][:2] + "***" if labels[0] else "***"
+        hostname = ".".join(labels)
+
+    port = f":{parts.port}" if parts.port else ""
+    auth = ""
+    if parts.username:
+        auth = "***"
+        if parts.password:
+            auth += ":***"
+        auth += "@"
+
+    netloc = f"{auth}{hostname}{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 @router.get("/registration")
