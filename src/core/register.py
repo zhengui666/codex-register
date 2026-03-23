@@ -636,6 +636,14 @@ class RegistrationEngine:
 
         return self._find_workspace_id_in_data(raw)
 
+    def _get_continue_url(self) -> Optional[str]:
+        """优先从创建账户响应中获取 continue_url"""
+        if not isinstance(self.create_account_response_data, dict):
+            return None
+
+        continue_url = str(self.create_account_response_data.get("continue_url") or "").strip()
+        return continue_url or None
+
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
         try:
@@ -899,19 +907,24 @@ class RegistrationEngine:
 
             # 13. 获取 Workspace ID
             self._log("13. 获取 Workspace ID...")
-            workspace_id = self._get_workspace_id()
-            if not workspace_id:
-                result.error_message = "获取 Workspace ID 失败"
-                return result
+            continue_url = self._get_continue_url()
+            workspace_id = None
+            if continue_url:
+                self._log("创建账户响应已提供 continue_url，跳过 Workspace 选择")
+            else:
+                workspace_id = self._get_workspace_id()
+                if not workspace_id:
+                    result.error_message = "获取 Workspace ID 失败"
+                    return result
 
-            result.workspace_id = workspace_id
+                result.workspace_id = workspace_id
 
-            # 14. 选择 Workspace
-            self._log("14. 选择 Workspace...")
-            continue_url = self._select_workspace(workspace_id)
-            if not continue_url:
-                result.error_message = "选择 Workspace 失败"
-                return result
+                # 14. 选择 Workspace
+                self._log("14. 选择 Workspace...")
+                continue_url = self._select_workspace(workspace_id)
+                if not continue_url:
+                    result.error_message = "选择 Workspace 失败"
+                    return result
 
             # 15. 跟随重定向链
             self._log("15. 跟随重定向链...")
