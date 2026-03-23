@@ -109,6 +109,18 @@ class RegistrationEngine:
         self.proxy_url = proxy_url
         self.callback_logger = callback_logger or (lambda msg: logger.info(msg))
         self.task_uuid = task_uuid
+        # 状态变量
+        self.email: Optional[str] = None
+        self.password: Optional[str] = None  # 注册密码
+        self.email_info: Optional[Dict[str, Any]] = None
+        self.oauth_start: Optional[OAuthStart] = None
+        self.session: Optional[cffi_requests.Session] = None
+        self.session_token: Optional[str] = None  # 会话令牌
+        self.create_account_response_data: Optional[Dict[str, Any]] = None
+        self.logs: list = []
+        self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
+        self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
+
         self._log(f"最终使用的 proxy_url: {self.proxy_url or 'None'}")
 
         # 创建 HTTP 客户端
@@ -124,18 +136,6 @@ class RegistrationEngine:
             scope=settings.openai_scope,
             proxy_url=proxy_url  # 传递代理配置
         )
-
-        # 状态变量
-        self.email: Optional[str] = None
-        self.password: Optional[str] = None  # 注册密码
-        self.email_info: Optional[Dict[str, Any]] = None
-        self.oauth_start: Optional[OAuthStart] = None
-        self.session: Optional[cffi_requests.Session] = None
-        self.session_token: Optional[str] = None  # 会话令牌
-        self.create_account_response_data: Optional[Dict[str, Any]] = None
-        self.logs: list = []
-        self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
-        self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
 
     def _log(self, message: str, level: str = "info"):
         """记录日志"""

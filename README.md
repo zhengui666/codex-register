@@ -158,6 +158,31 @@ export GHCR_TOKEN=你的 GitHub Token
 bash run-docker.sh
 ```
 
+### 一键更新服务器容器
+
+仓库根目录提供了 `deploy-server.sh`，默认会通过 SSH 连接到当前使用的服务器，执行下面的流程：
+
+- 更新服务器上的源码副本
+- 重新构建 `ghcr.io/zhengui666/codex-register:latest`
+- 备份旧容器里的 `/app/data` 和 `/app/logs`
+- 替换并重启 `codex-register` 容器
+
+直接运行：
+
+```bash
+bash deploy-server.sh
+```
+
+也可以通过环境变量覆盖默认值：
+
+```bash
+SERVER_HOST=107.173.156.228 \
+SERVER_USER=zzy \
+REMOTE_SRC_DIR=/home/zzy/codex-register-src \
+REMOTE_DEPLOY_DIR=/home/zzy/codex-register-deploy \
+bash deploy-server.sh
+```
+
 ## 打包为可执行文件
 
 ```bash
