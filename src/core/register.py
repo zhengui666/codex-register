@@ -9,6 +9,7 @@ import time
 import logging
 import secrets
 import string
+import base64
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -130,6 +131,7 @@ class RegistrationEngine:
         self.oauth_start: Optional[OAuthStart] = None
         self.session: Optional[cffi_requests.Session] = None
         self.session_token: Optional[str] = None  # 会话令牌
+        self.create_account_response_data: Optional[Dict[str, Any]] = None
         self.logs: list = []
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
@@ -496,52 +498,138 @@ class RegistrationEngine:
                 self._log(f"账户创建失败: {response.text[:200]}", "warning")
                 return False
 
+            try:
+                response_data = response.json()
+                self.create_account_response_data = response_data if isinstance(response_data, dict) else None
+            except Exception:
+                self.create_account_response_data = None
+
             return True
 
         except Exception as e:
             self._log(f"创建账户失败: {e}", "error")
             return False
 
+    def _decode_jwt_segment(self, segment: str) -> Dict[str, Any]:
+        """解码 JWT 段"""
+        raw = (segment or "").strip()
+        if not raw:
+            return {}
+
+        pad = "=" * ((4 - (len(raw) % 4)) % 4)
+        try:
+            decoded = base64.urlsafe_b64decode((raw + pad).encode("ascii"))
+            payload = json.loads(decoded.decode("utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _find_workspace_id_in_data(self, data: Any) -> Optional[str]:
+        """从嵌套数据结构中提取 Workspace ID"""
+        if isinstance(data, dict):
+            for key in ("workspace_id", "default_workspace_id", "active_workspace_id"):
+                value = str(data.get(key) or "").strip()
+                if value:
+                    return value
+
+            workspace = data.get("workspace")
+            if isinstance(workspace, dict):
+                workspace_id = str(
+                    workspace.get("id") or workspace.get("workspace_id") or ""
+                ).strip()
+                if workspace_id:
+                    return workspace_id
+
+            workspaces = data.get("workspaces")
+            if isinstance(workspaces, list):
+                for item in workspaces:
+                    if not isinstance(item, dict):
+                        continue
+                    workspace_id = str(
+                        item.get("id") or item.get("workspace_id") or ""
+                    ).strip()
+                    if workspace_id:
+                        return workspace_id
+
+            for value in data.values():
+                workspace_id = self._find_workspace_id_in_data(value)
+                if workspace_id:
+                    return workspace_id
+
+        if isinstance(data, list):
+            for item in data:
+                workspace_id = self._find_workspace_id_in_data(item)
+                if workspace_id:
+                    return workspace_id
+
+        return None
+
+    def _extract_workspace_id_from_cookie(self, cookie_name: str, cookie_value: str) -> Optional[str]:
+        """从 Cookie 内容中提取 Workspace ID"""
+        raw = (cookie_value or "").strip()
+        if not raw:
+            return None
+
+        if raw.startswith("{") or raw.startswith("["):
+            try:
+                workspace_id = self._find_workspace_id_in_data(json.loads(raw))
+                if workspace_id:
+                    self._log(f"从 Cookie {cookie_name} JSON 中获取到 Workspace ID: {workspace_id}")
+                    return workspace_id
+            except Exception:
+                pass
+
+        segments = raw.split(".")
+        if len(segments) >= 2:
+            for index in (1, 0, 2):
+                if index >= len(segments):
+                    continue
+                payload = self._decode_jwt_segment(segments[index])
+                if not payload:
+                    continue
+                workspace_id = self._find_workspace_id_in_data(payload)
+                if workspace_id:
+                    self._log(
+                        f"从 Cookie {cookie_name} 的 JWT segment[{index}] 中获取到 Workspace ID: {workspace_id}"
+                    )
+                    return workspace_id
+
+        return None
+
     def _get_workspace_id(self) -> Optional[str]:
         """获取 Workspace ID"""
         try:
-            auth_cookie = self.session.cookies.get("oai-client-auth-session")
-            if not auth_cookie:
-                self._log("未能获取到授权 Cookie", "error")
-                return None
-
-            # 解码 JWT
-            import base64
-            import json as json_module
-
-            try:
-                segments = auth_cookie.split(".")
-                if len(segments) < 1:
-                    self._log("授权 Cookie 格式错误", "error")
-                    return None
-
-                # 解码第一个 segment
-                payload = segments[0]
-                pad = "=" * ((4 - (len(payload) % 4)) % 4)
-                decoded = base64.urlsafe_b64decode((payload + pad).encode("ascii"))
-                auth_json = json_module.loads(decoded.decode("utf-8"))
-
-                workspaces = auth_json.get("workspaces") or []
-                if not workspaces:
-                    self._log("授权 Cookie 里没有 workspace 信息", "error")
-                    return None
-
-                workspace_id = str((workspaces[0] or {}).get("id") or "").strip()
-                if not workspace_id:
-                    self._log("无法解析 workspace_id", "error")
-                    return None
-
-                self._log(f"Workspace ID: {workspace_id}")
+            workspace_id = self._find_workspace_id_in_data(self.create_account_response_data)
+            if workspace_id:
+                self._log(f"从创建账户响应中获取到 Workspace ID: {workspace_id}")
                 return workspace_id
 
-            except Exception as e:
-                self._log(f"解析授权 Cookie 失败: {e}", "error")
+            cookies = getattr(self.session, "cookies", None)
+            if not cookies:
+                self._log("当前会话没有可用 Cookie", "error")
                 return None
+
+            prioritized_cookie_names = [
+                "oai-client-auth-session",
+                "__Secure-next-auth.session-token",
+            ]
+
+            for cookie_name in prioritized_cookie_names:
+                workspace_id = self._extract_workspace_id_from_cookie(
+                    cookie_name, cookies.get(cookie_name)
+                )
+                if workspace_id:
+                    return workspace_id
+
+            for cookie in cookies.jar:
+                if cookie.name in prioritized_cookie_names:
+                    continue
+                workspace_id = self._extract_workspace_id_from_cookie(cookie.name, cookie.value)
+                if workspace_id:
+                    return workspace_id
+
+            self._log("未能从创建账户响应或现有 Cookie 中解析出 Workspace ID", "error")
+            return None
 
         except Exception as e:
             self._log(f"获取 Workspace ID 失败: {e}", "error")
