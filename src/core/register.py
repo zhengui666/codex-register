@@ -527,7 +527,7 @@ class RegistrationEngine:
     def _find_workspace_id_in_data(self, data: Any) -> Optional[str]:
         """从嵌套数据结构中提取 Workspace ID"""
         if isinstance(data, dict):
-            for key in ("workspace_id", "default_workspace_id", "active_workspace_id"):
+            for key in ("workspace_id", "default_workspace_id", "active_workspace_id", "id"):
                 value = str(data.get(key) or "").strip()
                 if value:
                     return value
@@ -551,6 +551,11 @@ class RegistrationEngine:
                     if workspace_id:
                         return workspace_id
 
+            for key in ("account", "user", "profile", "tenant", "organization", "org", "metadata", "data", "result"):
+                workspace_id = self._find_workspace_id_in_data(data.get(key))
+                if workspace_id:
+                    return workspace_id
+
             for value in data.values():
                 workspace_id = self._find_workspace_id_in_data(value)
                 if workspace_id:
@@ -561,6 +566,16 @@ class RegistrationEngine:
                 workspace_id = self._find_workspace_id_in_data(item)
                 if workspace_id:
                     return workspace_id
+
+        if isinstance(data, str):
+            text = data.strip()
+            if text:
+                match = re.search(r'"workspace_id"\s*:\s*"([^"]+)"', text)
+                if match:
+                    return match.group(1).strip()
+                match = re.search(r'"id"\s*:\s*"([^"]+)"', text)
+                if match:
+                    return match.group(1).strip()
 
         return None
 
@@ -604,6 +619,17 @@ class RegistrationEngine:
                 self._log(f"从创建账户响应中获取到 Workspace ID: {workspace_id}")
                 return workspace_id
 
+            if isinstance(self.create_account_response_data, dict):
+                self._log(
+                    f"创建账户响应未命中 workspace_id，顶层 keys: {list(self.create_account_response_data.keys())}",
+                    "warning",
+                )
+            elif self.create_account_response_data is not None:
+                self._log(
+                    f"创建账户响应类型: {type(self.create_account_response_data).__name__}",
+                    "warning",
+                )
+
             cookies = getattr(self.session, "cookies", None)
             if not cookies:
                 self._log("当前会话没有可用 Cookie", "error")
@@ -629,6 +655,10 @@ class RegistrationEngine:
                     return workspace_id
 
             self._log("未能从创建账户响应或现有 Cookie 中解析出 Workspace ID", "error")
+            self._log(
+                "可用 Cookie: " + ", ".join(sorted({cookie.name for cookie in cookies.jar})) if getattr(cookies, "jar", None) else "可用 Cookie: <empty>",
+                "warning",
+            )
             return None
 
         except Exception as e:
