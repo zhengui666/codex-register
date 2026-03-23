@@ -18,7 +18,9 @@ ZDAYE_SUCCESS_CODE = "10001"
 ZDAYE_REQUEST_TIMEOUT = 10
 ZDAYE_PROBE_TIMEOUT = 8
 ZDAYE_CANDIDATE_COUNT = 20
-ZDAYE_PROBE_URL = "https://api.ipify.org?format=json"
+# Use the real target site for proxy probing so candidate screening matches
+# the actual registration path more closely.
+ZDAYE_PROBE_URL = "https://chatgpt.com"
 ZDAYE_CACHE_SETTING_KEY = "proxy.zdaye_candidate_cache"
 ZDAYE_CACHE_DESCRIPTION = "Zdaye candidate pool cache"
 
