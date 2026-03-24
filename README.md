@@ -118,6 +118,45 @@ python webui.py --host 0.0.0.0 --port 8080 --access-password mypassword
 > codex-register.exe --access-password mypassword
 > ```
 
+### Docker 部署
+
+项目支持通过 Docker 进行容器化部署。Docker 镜像已托管至 GitHub Container Registry (GHCR)。
+
+#### 使用 docker-compose (推荐)
+
+在项目根目录下，直接使用 `docker-compose` 启动：
+
+```bash
+docker-compose up -d
+```
+你可以在 `docker-compose.yml` 中修改相关的环境变量，例如配置端口或者设置 `WEBUI_ACCESS_PASSWORD` 访问密码。
+
+#### 直接使用 docker run
+
+如果你不想使用 docker-compose，也可以直接拉取并运行镜像：
+
+```bash
+docker run -d \
+  -p 15555:8000 \
+  -e APP_HOST=0.0.0.0 \
+  -e APP_PORT=8000 \
+  -e APP_ACCESS_PASSWORD=your_secure_password \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/logs:/app/logs \
+  --name codex-register \
+  ghcr.io/zhengui666/codex-register:latest
+```
+
+环境变量说明：
+- `APP_HOST`: 监听的主机地址 (默认 `0.0.0.0`)
+- `APP_PORT`: 容器内监听端口 (默认 `8000`)
+- `APP_ACCESS_PASSWORD`: 设置 Web UI 的访问密码
+- `WARP_ENABLED`: 设为 `1` 开启容器内 WARP
+- `WARP_PROXY_URL`: 应用运行时使用的本地 WARP SOCKS5 代理
+- `DEBUG`: 设为 `1` 或 `true` 开启调试模式
+- `LOG_LEVEL`: 日志级别，如 `info`, `debug`
+
+> **注意**：`data` 和 `logs` 都应挂载到宿主机，避免容器更新后数据库和运行日志丢失。
 ### 使用远程 PostgreSQL
 
 通过环境变量指定数据库连接字符串：

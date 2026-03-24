@@ -45,7 +45,7 @@ class DatabaseSessionManager:
         self.database_url = _build_sqlalchemy_url(database_url)
         self.engine = create_engine(
             self.database_url,
-            connect_args={"check_same_thread": False} if self.database_url.startswith("sqlite") else {},
+            connect_args={"check_same_thread": False, "timeout": 30} if self.database_url.startswith("sqlite") else {},
             echo=False,  # 设置为 True 可以查看所有 SQL 语句
             pool_pre_ping=True  # 连接池预检查
         )
@@ -110,6 +110,8 @@ class DatabaseSessionManager:
             ("accounts", "subscription_type", "VARCHAR(20)"),
             ("accounts", "subscription_at", "DATETIME"),
             ("accounts", "cookies", "TEXT"),
+            ("accounts", "token_sync_status", "VARCHAR(20) DEFAULT 'not_ready'"),
+            ("accounts", "token_sync_updated_at", "DATETIME"),
             ("proxies", "is_default", "BOOLEAN DEFAULT 0"),
             ("cpa_services", "include_proxy_url", "BOOLEAN DEFAULT 0"),
         ]

@@ -12,8 +12,14 @@ RUN set -eux; \
 
 WORKDIR /app
 
-ENV APP_DATA_DIR=/app/data
-ENV APP_LOGS_DIR=/app/logs
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_HOST=0.0.0.0 \
+    APP_PORT=8000 \
+    LOG_LEVEL=info \
+    DEBUG=0 \
+    APP_DATA_DIR=/app/data \
+    APP_LOGS_DIR=/app/logs
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -23,7 +29,5 @@ RUN chmod +x /app/run-with-warp.sh
 RUN mkdir -p data logs
 
 EXPOSE 8000
-
-ENV PYTHONUNBUFFERED=1
 
 CMD ["/app/run-with-warp.sh"]
