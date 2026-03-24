@@ -10,6 +10,7 @@ import logging
 import secrets
 import string
 import base64
+import ipaddress
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -164,6 +165,43 @@ class RegistrationEngine:
             logger.warning(message)
         else:
             logger.info(message)
+
+    def _log_egress_info(self):
+        """记录当前 session 观测到的出口 IP，仅用于日志取证。"""
+        endpoints = [
+            ("https://api.ipify.org?format=json", "ip"),
+            ("https://ifconfig.me/all.json", "ip_addr"),
+        ]
+
+        last_error = None
+        for url, field in endpoints:
+            try:
+                response = self.http_client.session.get(url, timeout=10)
+                response.raise_for_status()
+                payload = response.json()
+                egress_ip = str(payload.get(field, "")).strip()
+                if not egress_ip:
+                    last_error = f"{url} 返回中缺少 {field}"
+                    continue
+
+                ip_kind = "公网"
+                try:
+                    if ipaddress.ip_address(egress_ip).is_private:
+                        ip_kind = "私网"
+                except ValueError:
+                    ip_kind = "未知"
+
+                self._log(
+                    f"实际出口信息: ip={egress_ip}, 类型={ip_kind}, proxy_url={self.proxy_url or 'None'}"
+                )
+                return
+            except Exception as exc:
+                last_error = f"{url}: {exc}"
+
+        self._log(
+            f"实际出口信息探测失败: {last_error or 'unknown error'}, proxy_url={self.proxy_url or 'None'}",
+            "warning"
+        )
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
@@ -827,6 +865,7 @@ class RegistrationEngine:
         try:
             self._log("=" * 60)
             self._log("开始注册流程")
+            self._log_egress_info()
             self._log("=" * 60)
 
             # 1. 创建邮箱
