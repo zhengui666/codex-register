@@ -878,6 +878,15 @@ class RegistrationEngine:
                         self._log(f"从页面内容中提取到回调 URL: {callback_url[:100]}...")
                         return callback_url
                     if "/sign-in-with-chatgpt/codex/consent" in current_url:
+                        title_match = re.search(r"<title[^>]*>(.*?)</title>", response.text or "", re.IGNORECASE | re.DOTALL)
+                        form_action_match = re.search(r'<form[^>]*action=["\']([^"\']+)["\']', response.text or "", re.IGNORECASE)
+                        title_text = " ".join((title_match.group(1) if title_match else "").split())[:120]
+                        form_action = (form_action_match.group(1) if form_action_match else "")[:200]
+                        response_preview = " ".join((response.text or "")[:500].split())
+                        self._log(
+                            f"consent 页面调试: title={title_text or '<empty>'}, form_action={form_action or '<empty>'}, preview={response_preview or '<empty>'}",
+                            "warning",
+                        )
                         consent_next_url = self._submit_consent_form(current_url, response.text or "")
                         if consent_next_url:
                             self._log(f"已自动提交 consent 页面，下一跳: {consent_next_url[:100]}...")
