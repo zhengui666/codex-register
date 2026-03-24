@@ -119,6 +119,7 @@ class RegistrationEngine:
         self.session_token: Optional[str] = None  # 会话令牌
         self.create_account_response_data: Optional[Dict[str, Any]] = None
         self.logs: list = []
+        self.failure_type: Optional[str] = None
         self._otp_sent_at: Optional[float] = None  # OTP 发送时间戳
         self._is_existing_account: bool = False  # 是否为已注册账号（用于自动登录）
 
@@ -785,6 +786,7 @@ class RegistrationEngine:
                 self._log(f"重定向 {i+1}/{max_redirects}: {current_url[:100]}...")
 
                 if "/add-phone" in current_url:
+                    self.failure_type = "phone_verification_required"
                     self._log("当前流程进入 add-phone 页面，OpenAI 要求手机号验证，无法继续自动完成 OAuth 回调", "error")
                     return None
 
@@ -801,6 +803,7 @@ class RegistrationEngine:
                     self._log(f"非重定向状态码: {response.status_code}")
                     response_text = (response.text or "")[:5000]
                     if "/add-phone" in current_url or "add-phone" in response_text:
+                        self.failure_type = "phone_verification_required"
                         self._log("响应页面为 add-phone，当前账号需要手机号验证，自动注册流程无法继续", "error")
                         return None
                     break
@@ -860,7 +863,7 @@ class RegistrationEngine:
         Returns:
             RegistrationResult: 注册结果
         """
-        result = RegistrationResult(success=False, logs=self.logs)
+        result = RegistrationResult(success=False, logs=self.logs, metadata={})
 
         try:
             self._log("=" * 60)
@@ -978,7 +981,11 @@ class RegistrationEngine:
             self._log("15. 跟随重定向链...")
             callback_url = self._follow_redirects(continue_url)
             if not callback_url:
-                result.error_message = "跟随重定向链失败"
+                if self.failure_type == "phone_verification_required":
+                    result.error_message = "需要手机号验证"
+                    result.metadata["failure_type"] = self.failure_type
+                else:
+                    result.error_message = "跟随重定向链失败"
                 return result
 
             # 16. 处理 OAuth 回调
@@ -1029,6 +1036,8 @@ class RegistrationEngine:
         except Exception as e:
             self._log(f"注册过程中发生未预期错误: {e}", "error")
             result.error_message = str(e)
+            if self.failure_type:
+                result.metadata["failure_type"] = self.failure_type
             return result
 
     def save_to_database(self, result: RegistrationResult) -> bool:
