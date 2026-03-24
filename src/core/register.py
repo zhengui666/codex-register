@@ -12,6 +12,7 @@ import string
 import base64
 import ipaddress
 import html
+import urllib.parse
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -210,35 +211,70 @@ class RegistrationEngine:
         if not text:
             return None
 
-        decoded = html.unescape(text)
+        variants = []
+        seen = set()
+        current = text
+
+        for _ in range(3):
+            normalized = html.unescape(current).replace("\\u0026", "&").replace("\\/", "/")
+            for candidate in (
+                normalized,
+                urllib.parse.unquote(normalized),
+                urllib.parse.unquote_plus(normalized),
+                current,
+            ):
+                candidate = candidate.strip()
+                if candidate and candidate not in seen:
+                    seen.add(candidate)
+                    variants.append(candidate)
+            if normalized == current:
+                break
+            current = normalized
+
         patterns = [
             r'https://chatgpt\.com/api/auth/callback/openai\?[^"\'<\s]+',
             r'https://chat\.openai\.com/api/auth/callback/openai\?[^"\'<\s]+',
             r'/api/auth/callback/openai\?[^"\'<\s]+',
         ]
 
-        for pattern in patterns:
-            match = re.search(pattern, decoded)
-            if match:
-                candidate = match.group(0).replace("\\u0026", "&").replace("\\/", "/")
-                if "code=" in candidate and "state=" in candidate:
-                    return candidate
+        field_patterns = [
+            r'"(?:callback_url|callbackUrl|continue_url|continueUrl|redirect_uri|redirectUri|next|nextUrl|returnTo|redirectTo)"\s*:\s*"([^"]+)"',
+            r"(?:callback_url|callbackUrl|continue_url|continueUrl|redirect_uri|redirectUri|next|nextUrl|returnTo|redirectTo)=([^\"'&<\s]+)",
+        ]
+
+        for variant in variants:
+            for pattern in patterns:
+                match = re.search(pattern, variant)
+                if match:
+                    candidate = match.group(0).replace("\\u0026", "&").replace("\\/", "/")
+                    if "code=" in candidate and "state=" in candidate:
+                        return candidate
+
+            for pattern in field_patterns:
+                for match in re.finditer(pattern, variant):
+                    candidate = html.unescape(match.group(1)).replace("\\u0026", "&").replace("\\/", "/")
+                    candidate = urllib.parse.unquote(candidate)
+                    if "/api/auth/callback/openai" in candidate and "code=" in candidate and "state=" in candidate:
+                        return candidate
         return None
 
     def _submit_consent_form(self, current_url: str, response_text: str) -> Optional[str]:
         """尝试自动提交 consent 页面表单，返回下一跳 URL。"""
         form_match = re.search(
-            r'<form[^>]*action=["\'](?P<action>[^"\']+)["\'][^>]*method=["\']?(?P<method>post|get)?["\']?[^>]*>(?P<body>.*?)</form>',
+            r'(?P<form><form\b[^>]*>(?P<body>.*?)</form>)',
             response_text,
             re.IGNORECASE | re.DOTALL,
         )
         if not form_match:
-            return None
+            return self._extract_callback_url_from_text(response_text)
 
-        import urllib.parse
+        opening_tag_match = re.search(r"<form\b(?P<attrs>[^>]*)>", form_match.group("form"), re.IGNORECASE | re.DOTALL)
+        form_attrs = opening_tag_match.group("attrs") if opening_tag_match else ""
+        action_match = re.search(r'action=["\']([^"\']+)["\']', form_attrs, re.IGNORECASE)
+        method_match = re.search(r'method=["\']?(post|get)["\']?', form_attrs, re.IGNORECASE)
 
-        action = form_match.group("action") or current_url
-        method = (form_match.group("method") or "post").lower()
+        action = action_match.group(1) if action_match else current_url
+        method = (method_match.group(1) if method_match else "post").lower()
         form_body = form_match.group("body") or ""
         target_url = urllib.parse.urljoin(current_url, html.unescape(action))
 
