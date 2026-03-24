@@ -11,6 +11,7 @@ import secrets
 import string
 import base64
 import ipaddress
+import html
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -203,6 +204,69 @@ class RegistrationEngine:
             f"实际出口信息探测失败: {last_error or 'unknown error'}, proxy_url={self.proxy_url or 'None'}",
             "warning"
         )
+
+    def _extract_callback_url_from_text(self, text: str) -> Optional[str]:
+        """从 HTML/脚本文本里兜底提取 OAuth 回调 URL。"""
+        if not text:
+            return None
+
+        decoded = html.unescape(text)
+        patterns = [
+            r'https://chatgpt\.com/api/auth/callback/openai\?[^"\'<\s]+',
+            r'https://chat\.openai\.com/api/auth/callback/openai\?[^"\'<\s]+',
+            r'/api/auth/callback/openai\?[^"\'<\s]+',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, decoded)
+            if match:
+                candidate = match.group(0).replace("\\u0026", "&").replace("\\/", "/")
+                if "code=" in candidate and "state=" in candidate:
+                    return candidate
+        return None
+
+    def _submit_consent_form(self, current_url: str, response_text: str) -> Optional[str]:
+        """尝试自动提交 consent 页面表单，返回下一跳 URL。"""
+        form_match = re.search(
+            r'<form[^>]*action=["\'](?P<action>[^"\']+)["\'][^>]*method=["\']?(?P<method>post|get)?["\']?[^>]*>(?P<body>.*?)</form>',
+            response_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not form_match:
+            return None
+
+        import urllib.parse
+
+        action = form_match.group("action") or current_url
+        method = (form_match.group("method") or "post").lower()
+        form_body = form_match.group("body") or ""
+        target_url = urllib.parse.urljoin(current_url, html.unescape(action))
+
+        payload = {}
+        for input_match in re.finditer(r'<input[^>]*name=["\']([^"\']+)["\'][^>]*>', form_body, re.IGNORECASE):
+            input_tag = input_match.group(0)
+            name_match = re.search(r'name=["\']([^"\']+)["\']', input_tag, re.IGNORECASE)
+            if not name_match:
+                continue
+            value_match = re.search(r'value=["\']([^"\']*)["\']', input_tag, re.IGNORECASE)
+            payload[name_match.group(1)] = html.unescape(value_match.group(1) if value_match else "")
+
+        if method == "get":
+            response = self.session.get(target_url, params=payload, allow_redirects=False, timeout=15)
+        else:
+            response = self.session.post(target_url, data=payload, allow_redirects=False, timeout=15)
+
+        location = response.headers.get("Location") or ""
+        if location:
+            return urllib.parse.urljoin(target_url, location)
+
+        callback_url = self._extract_callback_url_from_text(response.text or "")
+        if callback_url:
+            if callback_url.startswith("/"):
+                return urllib.parse.urljoin(target_url, callback_url)
+            return callback_url
+
+        return None
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
         """生成随机密码"""
@@ -806,6 +870,19 @@ class RegistrationEngine:
                         self.failure_type = "phone_verification_required"
                         self._log("响应页面为 add-phone，当前账号需要手机号验证，自动注册流程无法继续", "error")
                         return None
+                    callback_url = self._extract_callback_url_from_text(response.text or "")
+                    if callback_url:
+                        if callback_url.startswith("/"):
+                            import urllib.parse
+                            callback_url = urllib.parse.urljoin(current_url, callback_url)
+                        self._log(f"从页面内容中提取到回调 URL: {callback_url[:100]}...")
+                        return callback_url
+                    if "/sign-in-with-chatgpt/codex/consent" in current_url:
+                        consent_next_url = self._submit_consent_form(current_url, response.text or "")
+                        if consent_next_url:
+                            self._log(f"已自动提交 consent 页面，下一跳: {consent_next_url[:100]}...")
+                            current_url = consent_next_url
+                            continue
                     break
 
                 if not location:
