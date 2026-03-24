@@ -6,6 +6,7 @@ import asyncio
 import logging
 import uuid
 import random
+import os
 from datetime import datetime
 from typing import List, Optional, Dict, Tuple
 
@@ -200,6 +201,48 @@ def _normalize_email_service_config(
     return normalized
 
 
+def _build_static_proxy_url_from_settings(settings) -> Optional[str]:
+    """从当前设置构造静态代理 URL。"""
+    if not getattr(settings, "proxy_enabled", False):
+        return None
+
+    proxy_host = (getattr(settings, "proxy_host", "") or "").strip()
+    proxy_port = getattr(settings, "proxy_port", None)
+    if not proxy_host or not proxy_port:
+        return None
+
+    proxy_type = (getattr(settings, "proxy_type", "http") or "http").strip()
+    proxy_username = (getattr(settings, "proxy_username", "") or "").strip()
+    proxy_password = (getattr(settings, "proxy_password", "") or "").strip()
+
+    if proxy_username:
+        auth = proxy_username
+        if proxy_password:
+            auth = f"{auth}:{proxy_password}"
+        return f"{proxy_type}://{auth}@{proxy_host}:{proxy_port}"
+
+    return f"{proxy_type}://{proxy_host}:{proxy_port}"
+
+
+def _resolve_registration_proxy(requested_proxy: Optional[str]) -> Tuple[Optional[str], str]:
+    """解析注册任务最终使用的代理。"""
+    if requested_proxy:
+        return requested_proxy, "使用请求中指定的代理"
+
+    warp_enabled = (os.getenv("WARP_ENABLED", "") or "").strip().lower()
+    if warp_enabled in {"1", "true", "yes", "on"}:
+        warp_proxy_url = (os.getenv("WARP_PROXY_URL", "") or "").strip()
+        if warp_proxy_url:
+            return warp_proxy_url, "使用 WARP 代理"
+
+    settings = get_settings()
+    static_proxy_url = _build_static_proxy_url_from_settings(settings)
+    if static_proxy_url:
+        return static_proxy_url, "使用数据库中的静态代理配置"
+
+    return None, "未配置代理，直接使用默认网络"
+
+
 def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
     """
     在线程池中执行的同步注册任务
@@ -230,8 +273,9 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             # 提前创建日志回调，确保代理获取阶段也会写入任务日志
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
-            actual_proxy_url = None
-            log_callback("[代理] 代理服务已取消，当前账号直接使用默认网络")
+            actual_proxy_url, proxy_source_message = _resolve_registration_proxy(proxy)
+            log_callback(f"[代理] {proxy_source_message}")
+            log_callback(f"[代理] 最终解析代理: {actual_proxy_url or 'None'}")
 
             # 更新任务的代理记录
             crud.update_registration_task(db, task_uuid, proxy=actual_proxy_url)
