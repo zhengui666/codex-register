@@ -43,6 +43,16 @@ fi
 
 mkdir -p "${REMOTE_DEPLOY_DIR}/data" "${REMOTE_DEPLOY_DIR}/logs"
 
+warp_enabled="$(grep -E '^WARP_ENABLED=' "${REMOTE_DEPLOY_DIR}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+warp_proxy_url="$(grep -E '^WARP_PROXY_URL=' "${REMOTE_DEPLOY_DIR}/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+
+warp_run_flags=()
+case "${warp_enabled,,}" in
+  1|true|yes|on)
+    warp_run_flags+=(--cap-add=NET_ADMIN --device=/dev/net/tun)
+    ;;
+esac
+
 if docker ps -a --format '{{.Names}}' | grep -Fxq "${CONTAINER_NAME}"; then
   docker cp "${CONTAINER_NAME}:/app/data/." "${REMOTE_DEPLOY_DIR}/data/" >/dev/null 2>&1 || true
   docker cp "${CONTAINER_NAME}:/app/logs/." "${REMOTE_DEPLOY_DIR}/logs/" >/dev/null 2>&1 || true
@@ -58,6 +68,7 @@ docker run -d \
   -p 8000:8000 \
   -v "${REMOTE_DEPLOY_DIR}/data:/app/data" \
   -v "${REMOTE_DEPLOY_DIR}/logs:/app/logs" \
+  "${warp_run_flags[@]}" \
   --env-file "${REMOTE_DEPLOY_DIR}/.env" \
   "${IMAGE_NAME}"
 
